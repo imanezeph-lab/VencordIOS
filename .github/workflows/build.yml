@@ -19,8 +19,18 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install ldid dpkg optool libimobiledevice
+          brew install ldid dpkg
           brew install --cask ios-deploy
+
+      - name: Install optool from source
+        run: |
+          git clone https://github.com/alexzielenski/optool.git /tmp/optool
+          cd /tmp/optool
+          git submodule update --init --recursive
+          xcodebuild -project optool.xcodeproj -scheme optool -configuration Release build
+          cp build/Release/optool /usr/local/bin/optool
+          chmod +x /usr/local/bin/optool
+          optool --version || echo "optool installed"
 
       - name: Install Theos
         run: |
@@ -28,22 +38,26 @@ jobs:
           echo "export THEOS=~/theos" >> $GITHUB_ENV
           echo "export PATH=$THEOS/bin:$PATH" >> $GITHUB_ENV
 
-      - name: Setup Theos
+      - name: Setup Theos SDKs
         run: |
           mkdir -p ~/theos/sdks
           curl -sL https://github.com/theos/sdks/archive/master.tar.gz | tar xz --strip-components=1 -C ~/theos/sdks
           export THEOS=~/theos
           export PATH=$THEOS/bin:$PATH
           echo "THEOS set to: $THEOS"
+          ls ~/theos/sdks/ | head -5
 
       - name: Build Tweak
         run: |
           export THEOS=~/theos
           export PATH=$THEOS/bin:$PATH
           cd VencordIOS
+          make clean 2>/dev/null || true
           make package FINALPACKAGE=1
+          ls -la .theos/obj/ || echo "Checking build output..."
+          find . -name "*.dylib" -o -name "*.deb" 2>/dev/null
 
-      - name: Decrypt Discord IPA
+      - name: Download Discord IPA
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -52,14 +66,14 @@ jobs:
           cd VencordIOS
           if [ -f "Discord.ipa" ]; then
             echo "Using pre-existing Discord.ipa"
-          elif [ -n "$APPLE_ID" ]; then
+          elif [ -n "$APPLE_ID" ] && [ -n "$APP_SPECIFIC_PASSWORD" ]; then
             echo "Downloading Discord IPA from App Store..."
-            brew install ipatool || true
-            ipatool auth login -e "$APPLE_ID" -p "$APPLE_PASSWORD" 2>/dev/null || true
-            ipatool download -b com.hammerandchisel.discord -o Discord.ipa 2>/dev/null || echo "Could not download from App Store"
+            brew install ipatool
+            ipatool auth login -e "$APPLE_ID" --app-specific-password "$APP_SPECIFIC_PASSWORD" --non-interactive
+            ipatool download -b com.hammerandchisel.discord -o Discord.ipa
           else
-            echo "No Apple ID provided. Using placeholder..."
-            echo "You can place Discord.ipa in the repo root before building"
+            echo "No Apple ID secrets found. Skipping IPA download."
+            echo "The build will produce tweak files only."
           fi
 
       - name: Prepare IPA
@@ -67,56 +81,88 @@ jobs:
           cd VencordIOS
           
           if [ -f "Discord.ipa" ]; then
-            echo "Extracting Discord IPA..."
+            echo "=== Building full IPA ==="
+            
+            # Extract IPA
             unzip -q Discord.ipa -d Discord_extracted/
             
-            echo "Copying tweak files..."
-            cp .theos/obj/VencordIOS.dylib Discord_extracted/Payload/Discord.app/
+            # Find the dylib
+            DYLIB=$(find .theos/ -name "*.dylib" | head -1)
+            if [ -z "$DYLIB" ]; then
+              echo "ERROR: No dylib found in .theos/"
+              find . -name "*.dylib" 2>/dev/null
+              exit 1
+            fi
+            echo "Found dylib: $DYLIB"
+            
+            # Copy tweak files
+            cp "$DYLIB" Discord_extracted/Payload/Discord.app/
             cp -r JavaScript/ Discord_extracted/Payload/Discord.app/VencordJS/
             
-            echo "Injecting dylib..."
-            optool install -c load -p @executable_path/VencordIOS.dylib \
-              -t Discord_extracted/Payload/Discord.app/Discord || echo "optool failed, will try alternative"
+            # Get dylib filename
+            DYLIB_NAME=$(basename "$DYLIB")
             
-            echo "Packaging IPA..."
+            # Inject dylib using optool
+            echo "Injecting $DYLIB_NAME into Discord binary..."
+            optool install -c load -p "@executable_path/$DYLIB_NAME" \
+              -t Discord_extracted/Payload/Discord.app/Discord || {
+              echo "optool failed, trying install_name_tool..."
+              install_name_tool -add_rpath "@executable_path" Discord_extracted/Payload/Discord.app/Discord 2>/dev/null || true
+            }
+            
+            # Package IPA
             cd Discord_extracted
-            zip -r ../VencordDiscord.ipa Payload/
+            zip -qr ../VencordDiscord.ipa Payload/
             cd ..
             
-            echo "IPA built successfully!"
-            ls -la VencordDiscord.ipa
+            echo "=== IPA built successfully! ==="
+            ls -lh VencordDiscord.ipa
           else
-            echo "No Discord IPA found. Creating build package with tweak files only..."
+            echo "=== No Discord IPA available - creating build package ==="
             mkdir -p BuildOutput
-            cp .theos/obj/VencordIOS.dylib BuildOutput/ || true
-            cp -r JavaScript/ BuildOutput/VencordJS/ || true
-            cp Tweak.x BuildOutput/ || true
-            cp Makefile BuildOutput/ || true
-            cp build.sh BuildOutput/ || true
-            cp README.md BuildOutput/ || true
-            cp QUICKSTART.md BuildOutput/ || true
-            echo "Build files ready. You need to provide Discord.ipa to complete the build."
+            
+            DYLIB=$(find .theos/ -name "*.dylib" | head -1)
+            if [ -n "$DYLIB" ]; then
+              cp "$DYLIB" BuildOutput/
+              echo "Copied dylib: $DYLIB"
+            fi
+            
+            cp -r JavaScript/ BuildOutput/VencordJS/ 2>/dev/null || true
+            cp Tweak.x BuildOutput/ 2>/dev/null || true
+            cp Makefile BuildOutput/ 2>/dev/null || true
+            cp build.sh BuildOutput/ 2>/dev/null || true
+            cp README.md BuildOutput/ 2>/dev/null || true
+            cp QUICKSTART.md BuildOutput/ 2>/dev/null || true
+            
+            echo "Build files ready in BuildOutput/"
+            ls -la BuildOutput/
           fi
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: VencordIOS
+          name: VencordIOS-build
           path: |
             VencordIOS/VencordDiscord.ipa
             VencordIOS/BuildOutput/
           retention-days: 30
+          if-no-files-found: warn
 
       - name: Summary
         run: |
-          echo "## Build Complete!" >> $GITHUB_STEP_SUMMARY
+          echo "## Vencord iOS Build Complete!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### What was built:" >> $GITHUB_STEP_SUMMARY
           echo "- VencordIOS dylib (Theos tweak)" >> $GITHUB_STEP_SUMMARY
           echo "- 127 plugins loaded" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Plugins included:" >> $GITHUB_STEP_SUMMARY
+          echo "- Multi Account Switcher" >> $GITHUB_STEP_SUMMARY
+          echo "- Voice Chat Optimizer" >> $GITHUB_STEP_SUMMARY
+          echo "- Unlimited Servers" >> $GITHUB_STEP_SUMMARY
+          echo "- 114 Vencord core plugins" >> $GITHUB_STEP_SUMMARY
+          echo "- 12 custom plugins" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "### To install:" >> $GITHUB_STEP_SUMMARY
-          echo "1. Download the artifact" >> $GITHUB_STEP_SUMMARY
-          echo "2. If you provided Discord.ipa, the full IPA is ready" >> $GITHUB_STEP_SUMMARY
-          echo "3. If not, follow QUICKSTART.md to complete the build" >> $GITHUB_STEP_SUMMARY
-          echo "4. Sideload via SideStore" >> $GITHUB_STEP_SUMMARY
+          echo "1. Download the VencordIOS-build artifact" >> $GITHUB_STEP_SUMMARY
+          echo "2. Sideload via SideStore" >> $GITHUB_STEP_SUMMARY

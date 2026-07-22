@@ -93,9 +93,11 @@ jobs:
             cp /tmp/discord_arm64e /tmp/discord_arm64e_orig
           fi
 
-          # Check encryption
-          echo "=== Encryption check ==="
-          python3 scripts/patch_macho.py check /tmp/discord_arm64 || true
+          # Check encryption - list all load commands
+          echo "=== Load commands in original binary ==="
+          python3 scripts/patch_macho.py list /tmp/discord_arm64 || true
+          echo "=== otool cross-check ==="
+          otool -l /tmp/discord_arm64 2>&1 | head -80
 
           # Inject dylib into arm64
           echo "=== Injecting dylib into arm64 ==="

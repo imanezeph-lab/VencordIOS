@@ -20,42 +20,40 @@ jobs:
       - name: Install dependencies
         run: |
           brew install ldid dpkg
-          brew install --cask ios-deploy
 
       - name: Install optool from source
         run: |
           git clone https://github.com/alexzielenski/optool.git /tmp/optool
           cd /tmp/optool
           git submodule update --init --recursive
-          xcodebuild -project optool.xcodeproj -scheme optool -configuration Release build
-          cp build/Release/optool /usr/local/bin/optool
-          chmod +x /usr/local/bin/optool
-          optool --version || echo "optool installed"
+          xcodebuild -project optool.xcodeproj -scheme optool -configuration Release SYMROOT=build 2>&1 | tail -20
+          if [ -f build/Release/optool ]; then
+            sudo cp build/Release/optool /usr/local/bin/optool
+            sudo chmod +x /usr/local/bin/optool
+            echo "optool installed successfully"
+          else
+            echo "optool build failed, will use install_name_tool fallback"
+          fi
 
       - name: Install Theos
         run: |
           git clone --recursive https://github.com/theos/theos.git ~/theos
-          echo "export THEOS=~/theos" >> $GITHUB_ENV
-          echo "export PATH=$THEOS/bin:$PATH" >> $GITHUB_ENV
 
       - name: Setup Theos SDKs
         run: |
           mkdir -p ~/theos/sdks
           curl -sL https://github.com/theos/sdks/archive/master.tar.gz | tar xz --strip-components=1 -C ~/theos/sdks
-          export THEOS=~/theos
-          export PATH=$THEOS/bin:$PATH
-          echo "THEOS set to: $THEOS"
-          ls ~/theos/sdks/ | head -5
+          ls ~/theos/sdks/ | head -10
 
       - name: Build Tweak
         run: |
           export THEOS=~/theos
-          export PATH=$THEOS/bin:$PATH
-          cd VencordIOS
+          export PATH="$THEOS/bin:$PATH"
           make clean 2>/dev/null || true
-          make package FINALPACKAGE=1
-          ls -la .theos/obj/ || echo "Checking build output..."
-          find . -name "*.dylib" -o -name "*.deb" 2>/dev/null
+          make package FINALPACKAGE=1 2>&1 | tail -50
+          echo "=== Build output ==="
+          find .theos/ -name "*.dylib" -o -name "*.deb" 2>/dev/null || echo "No output files found"
+          ls -la .theos/obj/ 2>/dev/null || echo "No .theos/obj/ directory"
 
       - name: Download Discord IPA
         env:
@@ -63,7 +61,6 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
         run: |
-          cd VencordIOS
           if [ -f "Discord.ipa" ]; then
             echo "Using pre-existing Discord.ipa"
           elif [ -n "$APPLE_ID" ] && [ -n "$APP_SPECIFIC_PASSWORD" ]; then
@@ -78,15 +75,11 @@ jobs:
 
       - name: Prepare IPA
         run: |
-          cd VencordIOS
-          
           if [ -f "Discord.ipa" ]; then
             echo "=== Building full IPA ==="
             
-            # Extract IPA
             unzip -q Discord.ipa -d Discord_extracted/
             
-            # Find the dylib
             DYLIB=$(find .theos/ -name "*.dylib" | head -1)
             if [ -z "$DYLIB" ]; then
               echo "ERROR: No dylib found in .theos/"
@@ -95,22 +88,20 @@ jobs:
             fi
             echo "Found dylib: $DYLIB"
             
-            # Copy tweak files
             cp "$DYLIB" Discord_extracted/Payload/Discord.app/
             cp -r JavaScript/ Discord_extracted/Payload/Discord.app/VencordJS/
             
-            # Get dylib filename
             DYLIB_NAME=$(basename "$DYLIB")
             
-            # Inject dylib using optool
             echo "Injecting $DYLIB_NAME into Discord binary..."
-            optool install -c load -p "@executable_path/$DYLIB_NAME" \
-              -t Discord_extracted/Payload/Discord.app/Discord || {
-              echo "optool failed, trying install_name_tool..."
+            if command -v optool &> /dev/null; then
+              optool install -c load -p "@executable_path/$DYLIB_NAME" \
+                -t Discord_extracted/Payload/Discord.app/Discord
+            else
+              echo "optool not available, using install_name_tool fallback"
               install_name_tool -add_rpath "@executable_path" Discord_extracted/Payload/Discord.app/Discord 2>/dev/null || true
-            }
+            fi
             
-            # Package IPA
             cd Discord_extracted
             zip -qr ../VencordDiscord.ipa Payload/
             cd ..
@@ -143,8 +134,8 @@ jobs:
         with:
           name: VencordIOS-build
           path: |
-            VencordIOS/VencordDiscord.ipa
-            VencordIOS/BuildOutput/
+            VencordDiscord.ipa
+            BuildOutput/
           retention-days: 30
           if-no-files-found: warn
 

@@ -6,7 +6,7 @@
 @property (nonatomic, strong) UIWindow *window;
 @end
 
-@interfaceRCTBridge : NSObject
+@interface RCTBridge : NSObject
 - (JSContext *)jsContext;
 @end
 

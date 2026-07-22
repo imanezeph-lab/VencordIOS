@@ -28,7 +28,7 @@ def patch_cryptoff(filepath, shift):
     ncmds = struct.unpack_from('<I', data, 16)[0]
 
     if magic == 0xFEEDFACF:
-        header_size = 0x1000
+        header_size = 0x20
     elif magic == 0xFEEDFACE:
         header_size = 0x1C
     else:
@@ -73,7 +73,7 @@ def check_encryption(filepath):
 
     magic = struct.unpack_from('<I', data, 0)[0]
     if magic == 0xFEEDFACF:
-        header_size = 0x1000
+        header_size = 0x20
     elif magic == 0xFEEDFACE:
         header_size = 0x1C
     else:

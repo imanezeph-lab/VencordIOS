@@ -7,53 +7,111 @@ import struct
 import sys
 import os
 
-MACHO_HEADER_64_SIZE = 0x20  # 32 bytes for mach_header_64
-MACHO_HEADER_32_SIZE = 0x1C  # 28 bytes for mach_header
-
-LC_ENCRYPTION_INFO_64 = 0x21
+# Correct Mach-O load command values from <mach-o/loader.h>
+LC_SEGMENT = 0x1
+LC_SYMTAB = 0x2
+LC_DYSYMTAB = 0xb
+LC_LOAD_DYLIB = 0xc
+LC_ID_DYLIB = 0xd
+LC_PREBOUND_DYLIB = 0x10
+LC_SEGMENT_64 = 0x19
+LC_ROUTINES_64 = 0x1a
+LC_UUID = 0x1b
+LC_CODE_SIGNATURE = 0x1d
+LC_ENCRYPTION_INFO = 0x21
+LC_DYLD_INFO = 0x22
+LC_MAIN = 0x80000028
+LC_ENCRYPTION_INFO_64 = 0x2c
 
 CMD_NAMES = {
-    0x01: "LC_SEGMENT",
-    0x02: "LC_SYMTAB",
-    0x05: "LC_DYSYMTAB",
-    0x0C: "LC_LOAD_DYLIB",
-    0x0D: "LC_ID_DYLIB",
-    0x11: "LC_PREBOUND_DYLIB",
-    0x15: "LC_SEGMENT_64",
-    0x19: "LC_CODE_SIGNATURE",
-    0x1A: "LC_SEGMENT_SPLIT_INFO",
-    0x1B: "LC_ENCRYPTION_INFO",
-    0x21: "LC_ENCRYPTION_INFO_64",
-    0x22: "LC_LAZY_LOAD_DYLIB",
-    0x26: "LC_DYLD_INFO",
-    0x29: "LC_DYLD_CHAINED_FIXUPS",
-    0x80000018: "LC_MAIN",
-    0x80000022: "LC_BUILD_VERSION",
+    LC_SEGMENT: "LC_SEGMENT",
+    LC_SYMTAB: "LC_SYMTAB",
+    0x05: "LC_UNIXTHREAD",
+    LC_DYSYMTAB: "LC_DYSYMTAB",
+    LC_LOAD_DYLIB: "LC_LOAD_DYLIB",
+    LC_ID_DYLIB: "LC_ID_DYLIB",
+    0x0e: "LC_LOAD_DYLINKER",
+    0x10: "LC_PREBOUND_DYLIB",
+    0x11: "LC_ROUTINES",
+    0x15: "LC_SUB_LIBRARY",
+    0x18: "LC_LOAD_WEAK_DYLIB",
+    LC_SEGMENT_64: "LC_SEGMENT_64",
+    LC_ROUTINES_64: "LC_ROUTINES_64",
+    LC_UUID: "LC_UUID",
+    0x8000001c: "LC_RPATH",
+    LC_CODE_SIGNATURE: "LC_CODE_SIGNATURE",
+    0x1e: "LC_SEGMENT_SPLIT_INFO",
+    0x20: "LC_LAZY_LOAD_DYLIB",
+    LC_ENCRYPTION_INFO: "LC_ENCRYPTION_INFO",
+    LC_DYLD_INFO: "LC_DYLD_INFO",
+    0x80000022: "LC_DYLD_INFO_ONLY",
+    0x24: "LC_VERSION_MIN_MACOSX",
+    0x25: "LC_VERSION_MIN_IPHONEOS",
+    0x26: "LC_FUNCTION_STARTS",
+    LC_MAIN: "LC_MAIN",
+    0x29: "LC_DATA_IN_CODE",
+    LC_ENCRYPTION_INFO_64: "LC_ENCRYPTION_INFO_64",
+    0x80000033: "LC_DYLD_CHAINED_FIXUPS",
+    0x80000034: "LC_DYLD_EXPORTS_TRIE",
 }
+
+MACHO_HEADER_64_SIZE = 0x20
+MACHO_HEADER_32_SIZE = 0x1C
+
+def get_header_info(data):
+    magic = struct.unpack_from('<I', data, 0)[0]
+    if magic == 0xFEEDFACF:
+        return MACHO_HEADER_64_SIZE, "Mach-O 64-bit"
+    elif magic == 0xFEEDFACE:
+        return MACHO_HEADER_32_SIZE, "Mach-O 32-bit"
+    else:
+        return None, f"Unknown magic={hex(magic)}"
+
+def find_encryption_info(data):
+    header_size, desc = get_header_info(data)
+    if header_size is None:
+        print(f"Not a Mach-O: {desc}")
+        return None
+
+    ncmds = struct.unpack_from('<I', data, 16)[0]
+    offset = header_size
+
+    for i in range(ncmds):
+        if offset + 8 > len(data):
+            break
+        cmd = struct.unpack_from('<I', data, offset)[0]
+        cmdsize = struct.unpack_from('<I', data, offset + 4)[0]
+        if cmdsize == 0:
+            break
+
+        if cmd == LC_ENCRYPTION_INFO_64:
+            cryptoff = struct.unpack_from('<I', data, offset + 8)[0]
+            cryptsize = struct.unpack_from('<I', data, offset + 12)[0]
+            cryptid = struct.unpack_from('<I', data, offset + 16)[0]
+            return {
+                'cmd_offset': offset,
+                'cryptoff_offset': offset + 8,
+                'cryptoff': cryptoff,
+                'cryptsize': cryptsize,
+                'cryptid': cryptid,
+            }
+
+        offset += cmdsize
+
+    return None
 
 def list_load_commands(filepath):
     with open(filepath, 'rb') as f:
         data = f.read()
 
-    magic = struct.unpack_from('<I', data, 0)[0]
+    header_size, desc = get_header_info(data)
+    if header_size is None:
+        print(f"Not a Mach-O: {desc}")
+        return False
 
-    if magic == 0xFEEDFACF:
-        header_size = MACHO_HEADER_64_SIZE
-        print(f"Binary: Mach-O 64-bit (magic={hex(magic)})")
-    elif magic == 0xFEEDFACE:
-        header_size = MACHO_HEADER_32_SIZE
-        print(f"Binary: Mach-O 32-bit (magic={hex(magic)})")
-    elif magic == 0xBEBAFECA or magic == 0xCAFEBABF:
-        print(f"Binary: FAT binary (magic={hex(magic)}) - cannot parse directly")
-        return
-    else:
-        print(f"Binary: Unknown magic={hex(magic)}")
-        return
-
-    filetype = struct.unpack_from('<I', data, 12)[0]
     ncmds = struct.unpack_from('<I', data, 16)[0]
     sizeofcmds = struct.unpack_from('<I', data, 20)[0]
-    print(f"filetype={filetype}, ncmds={ncmds}, sizeofcmds={sizeofcmds}")
+    print(f"Binary: {desc}, ncmds={ncmds}, sizeofcmds={sizeofcmds}")
     print(f"Load commands start at offset {hex(header_size)}")
 
     offset = header_size
@@ -69,22 +127,31 @@ def list_load_commands(filepath):
             print(f"  [zero cmdsize at offset {hex(offset)}]")
             break
 
-        cmd_name = CMD_NAMES.get(cmd, f"unknown(0x{cmd:x})")
+        cmd_name = CMD_NAMES.get(cmd, f"cmd_0x{cmd:x}")
 
-        if cmd == LC_ENCRYPTION_INFO_64 or cmd == 0x1B:  # 64 or 32 bit
+        if cmd == LC_ENCRYPTION_INFO_64:
             cryptoff = struct.unpack_from('<I', data, offset + 8)[0]
             cryptsize = struct.unpack_from('<I', data, offset + 12)[0]
             cryptid = struct.unpack_from('<I', data, offset + 16)[0]
             print(f"  [{i}] {cmd_name} at {hex(offset)}, size={cmdsize}")
             print(f"       cryptoff={hex(cryptoff)}, cryptsize={cryptsize}, cryptid={cryptid}")
             found_encryption = True
+        elif cmd == LC_ENCRYPTION_INFO:
+            cryptoff = struct.unpack_from('<I', data, offset + 8)[0]
+            cryptsize = struct.unpack_from('<I', data, offset + 12)[0]
+            cryptid = struct.unpack_from('<I', data, offset + 16)[0]
+            print(f"  [{i}] {cmd_name} (32-bit) at {hex(offset)}, size={cmdsize}")
+            print(f"       cryptoff={hex(cryptoff)}, cryptsize={cryptsize}, cryptid={cryptid}")
+            found_encryption = True
+        elif cmd in (LC_SEGMENT_64, LC_SEGMENT):
+            segname = data[offset+8:offset+24].split(b'\x00')[0].decode('ascii', errors='replace')
+            print(f"  [{i}] {cmd_name} ({segname}) at {hex(offset)}, size={cmdsize}")
         else:
             print(f"  [{i}] {cmd_name} at {hex(offset)}, size={cmdsize}")
 
         offset += cmdsize
 
-    print(f"\nTotal load commands scanned: {i+1 if ncmds > 0 else 0}")
-    print(f"Load commands end at: {hex(offset)}")
+    print(f"\nLoad commands end at: {hex(offset)}")
     print(f"Encryption found: {found_encryption}")
     return found_encryption
 
@@ -104,48 +171,23 @@ def patch_cryptoff(filepath, shift):
     with open(filepath, 'rb') as f:
         data = bytearray(f.read())
 
-    magic = struct.unpack_from('<I', data, 0)[0]
-
-    if magic == 0xFEEDFACF:
-        header_size = MACHO_HEADER_64_SIZE
-    elif magic == 0xFEEDFACE:
-        header_size = MACHO_HEADER_32_SIZE
-    else:
-        print(f"Unknown magic: {hex(magic)}")
+    info = find_encryption_info(data)
+    if info is None:
+        print("  No LC_ENCRYPTION_INFO_64 found")
         return
 
-    ncmds = struct.unpack_from('<I', data, 16)[0]
-    offset = header_size
-    patched = False
+    print(f"  Found LC_ENCRYPTION_INFO_64 at {hex(info['cmd_offset'])}")
+    print(f"  Before: cryptoff={hex(info['cryptoff'])}, cryptid={info['cryptid']}")
 
-    for i in range(ncmds):
-        if offset + 8 > len(data):
-            break
-        cmd = struct.unpack_from('<I', data, offset)[0]
-        cmdsize = struct.unpack_from('<I', data, offset + 4)[0]
-        if cmdsize == 0:
-            break
-
-        if cmd == LC_ENCRYPTION_INFO_64 or cmd == 0x1B:
-            cryptoff = struct.unpack_from('<I', data, offset + 8)[0]
-            cryptid = struct.unpack_from('<I', data, offset + 16)[0]
-            print(f"  Found {CMD_NAMES.get(cmd, 'ENCRYPTION')} at {hex(offset)}")
-            print(f"  Before: cryptoff={hex(cryptoff)}, cryptid={cryptid}")
-
-            if shift > 0:
-                new_cryptoff = cryptoff + shift
-                struct.pack_into('<I', data, offset + 8, new_cryptoff)
-                print(f"  After:  cryptoff={hex(new_cryptoff)}")
-                patched = True
-
-        offset += cmdsize
-
-    if patched:
+    if shift > 0:
+        new_cryptoff = info['cryptoff'] + shift
+        struct.pack_into('<I', data, info['cryptoff_offset'], new_cryptoff)
+        print(f"  After:  cryptoff={hex(new_cryptoff)}")
         with open(filepath, 'wb') as f:
             f.write(data)
         print(f"  Patched {os.path.basename(filepath)}")
     else:
-        print(f"  No encryption info found in {os.path.basename(filepath)}")
+        print("  No shift needed")
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
@@ -161,9 +203,15 @@ if __name__ == '__main__':
         list_load_commands(sys.argv[2])
 
     elif cmd == 'check':
-        result = list_load_commands(sys.argv[2])
-        print(f"\nEncrypted: {result}")
-        sys.exit(0 if not result else 1)
+        with open(sys.argv[2], 'rb') as f:
+            data = f.read()
+        info = find_encryption_info(data)
+        if info:
+            print(f"Encrypted: cryptid={info['cryptid']}")
+            sys.exit(1 if info['cryptid'] else 0)
+        else:
+            print("No encryption info found")
+            sys.exit(0)
 
     elif cmd == 'patch':
         orig = sys.argv[2]

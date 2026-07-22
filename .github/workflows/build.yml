@@ -87,13 +87,19 @@ jobs:
           echo "Injecting VencordIOS.dylib into Discord binary..."
           insert_dylib --strip-codesig --all-yes "@executable_path/VencordIOS.dylib" "$APP_DIR/Discord"
           
-          # Verify injection
-          otool -L "$APP_DIR/Discord" | grep -i vencord || echo "WARNING: dylib not found in load commands"
+          # insert_dylib creates Discord_patched — replace original
+          if [ -f "$APP_DIR/Discord_patched" ]; then
+            mv "$APP_DIR/Discord_patched" "$APP_DIR/Discord"
+            echo "Replaced original binary with patched version"
+          fi
           
-          # Re-sign with ldid to fix entitlements
+          # Verify injection
+          otool -L "$APP_DIR/Discord" | grep -i vencord && echo "INJECTION VERIFIED" || echo "WARNING: dylib not found in load commands"
+          
+          # Re-sign with ldid
           echo "Re-signing app..."
-          ldid -S -e "$APP_DIR/VencordIOS.plist" "$APP_DIR/Discord" 2>/dev/null || true
           ldid -S "$APP_DIR/Discord" 2>/dev/null || true
+          ldid -S "$APP_DIR/VencordIOS.dylib" 2>/dev/null || true
           
           # Package IPA
           echo "Packaging IPA..."

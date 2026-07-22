@@ -53,7 +53,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download discord-ipa --repo ${{ github.repository }} --pattern "Discord.ipa" --output Discord.ipa
+          gh release download discord-ipa --repo ${{ github.repository }} --pattern "*.ipa" --output Discord.ipa
           ls -lh Discord.ipa
 
       - name: Prepare and inject

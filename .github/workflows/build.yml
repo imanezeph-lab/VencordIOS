@@ -49,6 +49,13 @@ jobs:
           echo "=== Build output ==="
           find .theos/ -name "*.dylib" 2>/dev/null
           ls -la .theos/obj/ 2>/dev/null || echo "No .theos/obj/ directory"
+          # Check architecture of built dylib
+          DYLIB=$(find .theos/ -name "VencordIOS.dylib" | head -1)
+          if [ -n "$DYLIB" ]; then
+            echo "=== Dylib architecture ==="
+            lipo -info "$DYLIB" 2>&1 || file "$DYLIB"
+            otool -L "$DYLIB" 2>&1 | head -20
+          fi
 
       - name: Download Discord IPA
         env:
@@ -57,11 +64,39 @@ jobs:
           gh release download discord-ipa --repo ${{ github.repository }} --pattern "Discord.ipa" --output Discord.ipa
           ls -lh Discord.ipa
 
+      - name: Diagnose Discord binary
+        run: |
+          echo "=== Unzipping IPA ==="
+          unzip -q Discord.ipa -d Discord_extracted/
+          APP_DIR="Discord_extracted/Payload/Discord.app"
+          
+          echo "=== App contents ==="
+          ls -la "$APP_DIR/" | head -30
+          
+          echo "=== Binary architecture ==="
+          lipo -info "$APP_DIR/Discord" 2>&1 || file "$APP_DIR/Discord"
+          
+          echo "=== Check for encryption ==="
+          otool -l "$APP_DIR/Discord" 2>&1 | grep -A5 "LC_ENCRYPTION_INFO" || echo "No LC_ENCRYPTION_INFO found"
+          
+          echo "=== cryptid value ==="
+          otool -l "$APP_DIR/Discord" 2>&1 | grep -A3 "cryptid" || echo "No cryptid found"
+          
+          echo "=== Existing load commands count ==="
+          otool -l "$APP_DIR/Discord" 2>&1 | grep -c "cmd " || echo "N/A"
+          
+          echo "=== File type ==="
+          file "$APP_DIR/Discord"
+          
+          echo "=== Binary size ==="
+          ls -lh "$APP_DIR/Discord"
+          
+          echo "=== Check for embedded frameworks ==="
+          ls "$APP_DIR/Frameworks/" 2>/dev/null | head -20 || echo "No Frameworks dir"
+
       - name: Prepare IPA
         run: |
           echo "=== Building full IPA ==="
-          
-          unzip -q Discord.ipa -d Discord_extracted/
           
           DYLIB=$(find .theos/ -name "VencordIOS.dylib" | head -1)
           if [ -z "$DYLIB" ]; then
@@ -80,12 +115,15 @@ jobs:
           
           echo "Files copied to app bundle"
           ls -la "$APP_DIR/VencordIOS.dylib"
-          ls "$APP_DIR/VencordJS/plugins/" | wc -l
-          echo "plugins copied"
+          echo "plugins copied: $(ls "$APP_DIR/VencordJS/plugins/" | wc -l) files"
+          
+          # Record original load commands
+          echo "=== Original load commands ==="
+          otool -l "$APP_DIR/Discord" 2>&1 | grep -E "cmd |name |path " | head -30
           
           # Inject dylib using insert_dylib (adds LC_LOAD_DYLIB command)
-          echo "Injecting VencordIOS.dylib into Discord binary..."
-          insert_dylib --strip-codesig --all-yes "@executable_path/VencordIOS.dylib" "$APP_DIR/Discord"
+          echo "=== Injecting VencordIOS.dylib into Discord binary ==="
+          insert_dylib --strip-codesig --all-yes "@executable_path/VencordIOS.dylib" "$APP_DIR/Discord" 2>&1
           
           # insert_dylib creates Discord_patched — replace original
           if [ -f "$APP_DIR/Discord_patched" ]; then
@@ -94,15 +132,53 @@ jobs:
           fi
           
           # Verify injection
+          echo "=== Verification ==="
           otool -L "$APP_DIR/Discord" | grep -i vencord && echo "INJECTION VERIFIED" || echo "WARNING: dylib not found in load commands"
           
-          # Re-sign with ldid
-          echo "Re-signing app..."
-          ldid -S "$APP_DIR/Discord" 2>/dev/null || true
-          ldid -S "$APP_DIR/VencordIOS.dylib" 2>/dev/null || true
+          echo "=== New load commands ==="
+          otool -l "$APP_DIR/Discord" 2>&1 | grep -E "cmd |name |path " | head -30
+          
+          echo "=== File type after patch ==="
+          file "$APP_DIR/Discord"
+          ls -lh "$APP_DIR/Discord"
+          
+          # Re-sign with ldid - use entitlements if available
+          echo "=== Re-signing app ==="
+          # Generate minimal entitlements for JIT (needed for JS engine)
+          cat > /tmp/ent.plist << 'ENTEOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>platform-application</key>
+            <true/>
+            <key>com.apple.security.cs.allow-jit</key>
+            <true/>
+            <key>com.apple.private.security.no-sandbox</key>
+            <true/>
+          </dict>
+          </plist>
+          ENTEOF
+          
+          ldid -S/tmp/ent.plist "$APP_DIR/Discord" 2>&1 || ldid -S "$APP_DIR/Discord" 2>&1 || echo "Discord re-sign failed"
+          ldid -S "$APP_DIR/VencordIOS.dylib" 2>&1 || echo "Dylib re-sign failed"
+          
+          # Also re-sign all frameworks
+          if [ -d "$APP_DIR/Frameworks" ]; then
+            for fw in "$APP_DIR/Frameworks/"*.framework; do
+              if [ -d "$fw" ]; then
+                fw_name=$(basename "$fw")
+                fw_binary="$fw/$fw_name"
+                if [ -f "$fw_binary" ]; then
+                  ldid -S "$fw_binary" 2>/dev/null || true
+                fi
+              fi
+            done
+            echo "Frameworks re-signed"
+          fi
           
           # Package IPA
-          echo "Packaging IPA..."
+          echo "=== Packaging IPA ==="
           cd Discord_extracted
           zip -qr ../VencordDiscord.ipa Payload/
           cd ..
@@ -123,12 +199,17 @@ jobs:
           echo "## Vencord iOS Build Complete!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### What was built:" >> $GITHUB_STEP_SUMMARY
-          echo "- VencordIOS.dylib (Theos tweak, arm64+arm64e)" >> $GITHUB_STEP_SUMMARY
+          echo "- VencordIOS.dylib (arm64+arm64e)" >> $GITHUB_STEP_SUMMARY
           echo "- VencordIOS.plist (filter for Discord injection)" >> $GITHUB_STEP_SUMMARY
           echo "- 14 plugin JS files" >> $GITHUB_STEP_SUMMARY
-          echo "- vencordAllPlugins.js (114 core plugins)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### To install:" >> $GITHUB_STEP_SUMMARY
           echo "1. Download VencordIOS-build artifact" >> $GITHUB_STEP_SUMMARY
           echo "2. Open SideStore" >> $GITHUB_STEP_SUMMARY
           echo "3. Tap + and select VencordDiscord.ipa" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Debugging:" >> $GITHUB_STEP_SUMMARY
+          echo "After installing, check for crash log at:" >> $GITHUB_STEP_SUMMARY
+          echo "\`Documents/VencordIOS/vencord.log\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Use Filza or similar to read the log file." >> $GITHUB_STEP_SUMMARY

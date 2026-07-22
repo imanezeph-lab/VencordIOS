@@ -22,11 +22,12 @@ jobs:
           brew install ldid dpkg
 
       - name: Install optool from source
+        continue-on-error: true
         run: |
           git clone https://github.com/alexzielenski/optool.git /tmp/optool
           cd /tmp/optool
           git submodule update --init --recursive
-          xcodebuild -project optool.xcodeproj -scheme optool -configuration Release SYMROOT=build 2>&1 | tail -20
+          xcodebuild -project optool.xcodeproj -scheme optool -configuration Release SYMROOT=build 2>&1 | tail -20 || true
           if [ -f build/Release/optool ]; then
             sudo cp build/Release/optool /usr/local/bin/optool
             sudo chmod +x /usr/local/bin/optool
@@ -57,21 +58,15 @@ jobs:
 
       - name: Download Discord IPA
         env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -f "Discord.ipa" ]; then
             echo "Using pre-existing Discord.ipa"
-          elif [ -n "$APPLE_ID" ] && [ -n "$APP_SPECIFIC_PASSWORD" ]; then
-            echo "Downloading Discord IPA from App Store..."
-            brew install ipatool || true
-            ipatool auth login --email "$APPLE_ID" --password "$APP_SPECIFIC_PASSWORD" --non-interactive || echo "Auth failed, trying alternate flags..."
-            ipatool download --bundle-identifier com.hammerandchisel.discord --output Discord.ipa || echo "Download failed - build will continue with tweak files only"
           else
-            echo "No Apple ID secrets found. Skipping IPA download."
-            echo "The build will produce tweak files only."
+            echo "Downloading Discord IPA from release..."
+            gh release download discord-ipa --repo ${{ github.repository }} --pattern "Discord.ipa" --output Discord.ipa || echo "Download failed"
           fi
+          ls -lh Discord.ipa 2>/dev/null || echo "No Discord IPA available"
 
       - name: Prepare IPA
         run: |
@@ -80,7 +75,7 @@ jobs:
             
             unzip -q Discord.ipa -d Discord_extracted/
             
-            DYLIB=$(find .theos/ -name "*.dylib" | head -1)
+            DYLIB=$(find .theos/ -name "VencordIOS.dylib" | head -1)
             if [ -z "$DYLIB" ]; then
               echo "ERROR: No dylib found in .theos/"
               find . -name "*.dylib" 2>/dev/null
@@ -88,20 +83,30 @@ jobs:
             fi
             echo "Found dylib: $DYLIB"
             
+            # Copy tweak dylib
             cp "$DYLIB" Discord_extracted/Payload/Discord.app/
-            cp -r JavaScript/ Discord_extracted/Payload/Discord.app/VencordJS/
+            
+            # Copy filter plist
+            cp VencordIOS.plist Discord_extracted/Payload/Discord.app/
+            
+            # Copy JavaScript files
+            mkdir -p Discord_extracted/Payload/Discord.app/VencordJS/plugins
+            cp JavaScript/plugins/*.js Discord_extracted/Payload/Discord.app/VencordJS/plugins/
             
             DYLIB_NAME=$(basename "$DYLIB")
             
+            # Inject dylib
             echo "Injecting $DYLIB_NAME into Discord binary..."
             if command -v optool &> /dev/null; then
               optool install -c load -p "@executable_path/$DYLIB_NAME" \
                 -t Discord_extracted/Payload/Discord.app/Discord
             else
-              echo "optool not available, using install_name_tool fallback"
+              echo "Using install_name_tool to add rpath"
               install_name_tool -add_rpath "@executable_path" Discord_extracted/Payload/Discord.app/Discord 2>/dev/null || true
+              install_name_tool -change "$DYLIB_NAME" "@executable_path/$DYLIB_NAME" Discord_extracted/Payload/Discord.app/Discord 2>/dev/null || true
             fi
             
+            # Package IPA
             cd Discord_extracted
             zip -qr ../VencordDiscord.ipa Payload/
             cd ..
@@ -112,12 +117,13 @@ jobs:
             echo "=== No Discord IPA available - creating build package ==="
             mkdir -p BuildOutput
             
-            DYLIB=$(find .theos/ -name "*.dylib" | head -1)
+            DYLIB=$(find .theos/ -name "VencordIOS.dylib" | head -1)
             if [ -n "$DYLIB" ]; then
               cp "$DYLIB" BuildOutput/
               echo "Copied dylib: $DYLIB"
             fi
             
+            cp VencordIOS.plist BuildOutput/ 2>/dev/null || true
             cp -r JavaScript/ BuildOutput/VencordJS/ 2>/dev/null || true
             cp Tweak.x BuildOutput/ 2>/dev/null || true
             cp Makefile BuildOutput/ 2>/dev/null || true

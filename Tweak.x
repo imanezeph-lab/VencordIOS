@@ -230,12 +230,222 @@ void setupHooks(void) {
     }
 }
 
+#pragma mark - Native Settings UI
+
+static UIView *vencordOverlayButton = nil;
+static UIView *vencordSettingsPanel = nil;
+
+@interface VencordPluginEntry : NSObject
+@property (nonatomic, copy) NSString *pluginId;
+@property (nonatomic, copy) NSString *pluginName;
+@property (nonatomic, copy) NSString *pluginDesc;
+@property (nonatomic, assign) BOOL enabled;
+@end
+
+@implementation VencordPluginEntry
+@end
+
+static NSArray<VencordPluginEntry *> *pluginEntries = nil;
+
+@interface VencordHandler : NSObject
++ (instancetype)shared;
+- (void)buttonTapped;
+- (void)closeTapped;
+- (void)toggleChanged:(UISwitch *)sender;
+- (void)buttonPanned:(UIPanGestureRecognizer *)pan;
+@end
+
+@implementation VencordHandler
+
++ (instancetype)shared {
+    static VencordHandler *instance = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        instance = [[VencordHandler alloc] init];
+    });
+    return instance;
+}
+
+- (void)buttonTapped {
+    if (vencordSettingsPanel && !vencordSettingsPanel.hidden) {
+        vencordSettingsPanel.hidden = YES;
+    } else {
+        [self showSettingsPanel];
+    }
+}
+
+- (void)closeTapped {
+    vencordSettingsPanel.hidden = YES;
+}
+
+- (void)toggleChanged:(UISwitch *)sender {
+    int index = (int)sender.tag;
+    if (index < 0 || index >= (int)pluginEntries.count) return;
+    VencordPluginEntry *entry = pluginEntries[index];
+    entry.enabled = sender.isOn;
+    pluginStates[entry.pluginId] = @(sender.isOn);
+    savePluginStates();
+    vencordLog(@"Plugin %@ %@", entry.pluginId, sender.isOn ? @"enabled" : @"disabled");
+    flushLog();
+}
+
+- (void)buttonPanned:(UIPanGestureRecognizer *)pan {
+    CGPoint translation = [pan translationInView:pan.view];
+    pan.view.center = CGPointMake(pan.view.center.x + translation.x, pan.view.center.y + translation.y);
+    [pan setTranslation:CGPointZero inView:pan.view];
+}
+
+- (void)showSettingsPanel {
+    if (vencordSettingsPanel) {
+        vencordSettingsPanel.hidden = NO;
+        return;
+    }
+
+    NSMutableArray<VencordPluginEntry *> *entries = [NSMutableArray array];
+    struct { NSString *pid; NSString *pname; NSString *pdesc; } plugins[] = {
+        { @"noTrack", @"No Track", @"Disables Discord analytics/tracking" },
+        { @"silentTyping", @"Silent Typing", @"Hides typing indicator from others" },
+        { @"messageLogger", @"Message Logger", @"Logs deleted/edited messages" },
+        { @"betterEmbeds", @"Better Embeds", @"Improved link embeds" },
+        { @"noReplyTimeout", @"No Reply Timeout", @"Removes reply timeout limit" },
+        { @"showHiddenServers", @"Hidden Servers", @"Shows hidden servers in list" },
+        { @"blurNSFW", @"Blur NSFW", @"Blurs NSFW content in chat" },
+        { @"betterStatus", @"Better Status", @"Custom status controls" },
+        { @"emojiUtilities", @"Emoji Utilities", @"Extra emoji features" },
+        { @"multiAccount", @"Account Switcher", @"Switch between accounts" },
+        { @"voiceOptimizer", @"Voice Optimizer", @"Optimizes voice chat settings" },
+        { @"unlimitedServers", @"Unlimited Servers", @"Shows all servers in sidebar" },
+    };
+    for (int i = 0; i < sizeof(plugins)/sizeof(plugins[0]); i++) {
+        VencordPluginEntry *entry = [[VencordPluginEntry alloc] init];
+        entry.pluginId = plugins[i].pid;
+        entry.pluginName = plugins[i].pname;
+        entry.pluginDesc = plugins[i].pdesc;
+        entry.enabled = isPluginEnabled(plugins[i].pid);
+        [entries addObject:entry];
+    }
+    pluginEntries = entries;
+
+    CGRect screenBounds = [UIScreen mainScreen].bounds;
+    CGFloat w = MIN(340, screenBounds.size.width - 32);
+    CGFloat x = (screenBounds.size.width - w) / 2;
+    CGFloat topY = 100;
+
+    UIView *panel = [[UIView alloc] initWithFrame:CGRectMake(x, topY, w, 420)];
+    panel.backgroundColor = [UIColor colorWithRed:0.17 green:0.18 blue:0.2 alpha:1.0];
+    panel.layer.cornerRadius = 16;
+    panel.layer.shadowColor = [UIColor blackColor].CGColor;
+    panel.layer.shadowOpacity = 0.5;
+    panel.layer.shadowOffset = CGSizeMake(0, 4);
+    panel.layer.shadowRadius = 20;
+
+    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, 12, w - 50, 24)];
+    titleLabel.text = @"Vencord iOS";
+    titleLabel.textColor = [UIColor whiteColor];
+    titleLabel.font = [UIFont boldSystemFontOfSize:17];
+    [panel addSubview:titleLabel];
+
+    UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    closeBtn.frame = CGRectMake(w - 40, 8, 32, 32);
+    [closeBtn setTitle:@"\u2715" forState:UIControlStateNormal];
+    [closeBtn setTitleColor:[UIColor lightGrayColor] forState:UIControlStateNormal];
+    closeBtn.titleLabel.font = [UIFont systemFontOfSize:18];
+    [closeBtn addTarget:[VencordHandler shared] action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
+    [panel addSubview:closeBtn];
+
+    UIScrollView *scrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 44, w, 370)];
+    scrollView.showsVerticalScrollIndicator = YES;
+
+    CGFloat yPos = 0;
+    for (int i = 0; i < (int)pluginEntries.count; i++) {
+        VencordPluginEntry *entry = pluginEntries[i];
+        UIView *row = [[UIView alloc] initWithFrame:CGRectMake(8, yPos, w - 16, 56)];
+
+        UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectMake(w - 68, 4, 51, 31)];
+        toggle.on = entry.enabled;
+        toggle.tag = i;
+        toggle.onTintColor = [UIColor colorWithRed:0.345 green:0.396 blue:0.949 alpha:1.0];
+        [toggle addTarget:[VencordHandler shared] action:@selector(toggleChanged:) forControlEvents:UIControlEventValueChanged];
+
+        UILabel *nameLabel = [[UILabel alloc] initWithFrame:CGRectMake(8, 2, w - 90, 20)];
+        nameLabel.text = entry.pluginName;
+        nameLabel.textColor = [UIColor whiteColor];
+        nameLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+
+        UILabel *descLabel = [[UILabel alloc] initWithFrame:CGRectMake(8, 22, w - 90, 20)];
+        descLabel.text = entry.pluginDesc;
+        descLabel.textColor = [UIColor lightGrayColor];
+        descLabel.font = [UIFont systemFontOfSize:11];
+
+        UIView *separator = [[UIView alloc] initWithFrame:CGRectMake(8, 52, w - 16, 0.5)];
+        separator.backgroundColor = [UIColor colorWithWhite:0.3 alpha:0.5];
+
+        [row addSubview:nameLabel];
+        [row addSubview:descLabel];
+        [row addSubview:toggle];
+        [row addSubview:separator];
+        [scrollView addSubview:row];
+
+        yPos += 56;
+    }
+    scrollView.contentSize = CGSizeMake(w, yPos);
+    [panel addSubview:scrollView];
+
+    UIWindow *keyWindow = nil;
+    for (UIWindow *win in [UIApplication sharedApplication].windows) {
+        if (win.isKeyWindow) { keyWindow = win; break; }
+    }
+    if (!keyWindow) keyWindow = [UIApplication sharedApplication].windows.firstObject;
+    [keyWindow addSubview:panel];
+
+    vencordSettingsPanel = panel;
+}
+
+@end
+
+void createOverlayButton(void) {
+    if (vencordOverlayButton) return;
+
+    CGRect screenBounds = [UIScreen mainScreen].bounds;
+    CGFloat btnSize = 48;
+
+    UIView *btn = [[UIView alloc] initWithFrame:CGRectMake(screenBounds.size.width - 64, screenBounds.size.height - 160, btnSize, btnSize)];
+    btn.backgroundColor = [UIColor colorWithRed:0.345 green:0.396 blue:0.949 alpha:1.0];
+    btn.layer.cornerRadius = btnSize / 2;
+    btn.clipsToBounds = YES;
+    btn.layer.shadowColor = [UIColor colorWithRed:0.345 green:0.396 blue:0.949 alpha:1.0].CGColor;
+    btn.layer.shadowOpacity = 0.5;
+    btn.layer.shadowOffset = CGSizeMake(0, 2);
+    btn.layer.shadowRadius = 8;
+
+    UILabel *vLabel = [[UILabel alloc] initWithFrame:btn.bounds];
+    vLabel.text = @"V";
+    vLabel.textColor = [UIColor whiteColor];
+    vLabel.font = [UIFont boldSystemFontOfSize:22];
+    vLabel.textAlignment = NSTextAlignmentCenter;
+    [btn addSubview:vLabel];
+
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:[VencordHandler shared] action:@selector(buttonTapped)];
+    [btn addGestureRecognizer:tap];
+
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:[VencordHandler shared] action:@selector(buttonPanned:)];
+    [btn addGestureRecognizer:pan];
+
+    UIWindow *keyWindow = nil;
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        if (w.isKeyWindow) { keyWindow = w; break; }
+    }
+    if (!keyWindow) keyWindow = [UIApplication sharedApplication].windows.firstObject;
+    [keyWindow addSubview:btn];
+
+    vencordOverlayButton = btn;
+}
+
 #pragma mark - Constructor
 
 __attribute__((constructor))
 static void vencordInit(void) {
     @autoreleasepool {
-        // Set up logging immediately
         NSString *documentsPath = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
         NSString *vencordPath = [documentsPath stringByAppendingPathComponent:@"VencordIOS"];
         [[NSFileManager defaultManager] createDirectoryAtPath:vencordPath
@@ -244,18 +454,22 @@ static void vencordInit(void) {
                                                         error:nil];
         logFilePath = [vencordPath stringByAppendingPathComponent:@"vencord.log"];
 
-        // Clear old log
         [@"" writeToFile:logFilePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
         logBuffer = [NSMutableString string];
 
         vencordLog(@"=== Vencord for iOS v1.0.0 ===");
         vencordLog(@"Dylib loaded via constructor");
-        vencordLog(@"Bundle path: %@", [[NSBundle mainBundle] bundlePath]);
 
         loadPluginStates();
-        vencordLog(@"Plugin states loaded");
-
         setupHooks();
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            vencordLog(@"Creating native overlay button...");
+            createOverlayButton();
+            vencordLog(@"Overlay button created");
+            flushLog();
+        });
+
         vencordLog(@"Constructor complete");
         flushLog();
     }

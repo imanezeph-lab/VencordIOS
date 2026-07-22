@@ -1,49 +1,27 @@
-/**
- * Better Status Plugin
- * Enhanced status options including invisible status and custom messages
- */
-
 (function() {
     'use strict';
 
-    Vencord.registerPlugin({
-        id: 'betterStatus',
-        name: 'Better Status',
-        description: 'Enhanced status options and custom status messages',
-        author: 'VencordIOS',
-        version: '1.0.0',
+    const plugin = Vencord.registerPlugin(
+        'betterStatus',
+        'Better Status',
+        'Custom status messages and invisible status option',
+        'VencordIOS',
+        '1.0.0'
+    );
 
-        start: function() {
-            // Add status options to UI
-            const statusOptions = {
-                online: 'Online',
-                idle: 'Idle',
-                dnd: 'Do Not Disturb',
-                invisible: 'Invisible'
-            };
+    plugin.start = function() {
+        window._vc_betterStatus = true;
+        console.log('[BetterStatus] Enabled - enhanced status options available');
+    };
 
-            // Custom status presets
-            this.presets = [
-                { name: 'Playing a game', text: 'Playing a game', emoji: '🎮' },
-                { name: 'Listening to', text: 'Listening to', emoji: '🎵' },
-                { name: 'Watching', text: 'Watching', emoji: '📺' },
-                { name: 'Streaming', text: 'Streaming', emoji: '🔴' },
-                { name: 'Custom', text: '', emoji: '✨' }
-            ];
+    plugin.setStatus = function(status, text) {
+        console.log('[BetterStatus] Setting status: ' + status + ' - ' + text);
+    };
 
-            Vencord.Logger.log('BetterStatus', 'Enhanced status options enabled');
-        },
+    plugin.stop = function() {
+        window._vc_betterStatus = false;
+        console.log('[BetterStatus] Disabled');
+    };
 
-        setStatus: function(status, text, emoji) {
-            Vencord.Logger.log('BetterStatus', `Setting status: ${status} - ${text || ''}`);
-        },
-
-        setCustomStatus: function(text, emoji, expiresAt) {
-            Vencord.Logger.log('BetterStatus', `Custom status: ${text}`);
-        },
-
-        stop: function() {
-            Vencord.Logger.log('BetterStatus', 'Plugin stopped');
-        }
-    });
+    Vencord.startPlugin('betterStatus');
 })();

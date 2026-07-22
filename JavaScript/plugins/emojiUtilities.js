@@ -1,52 +1,30 @@
-/**
- * Emoji Utilities Plugin
- * Copy any emoji, see emoji info, and enhanced emoji features
- */
-
 (function() {
     'use strict';
 
-    Vencord.registerPlugin({
-        id: 'emojiUtilities',
-        name: 'Emoji Utilities',
-        description: 'Copy emojis and view emoji information',
-        author: 'VencordIOS',
-        version: '1.0.0',
+    const plugin = Vencord.registerPlugin(
+        'emojiUtilities',
+        'Emoji Utilities',
+        'Copy any emoji, see emoji info, and use emoji autocomplete',
+        'VencordIOS',
+        '1.0.0'
+    );
 
-        start: function() {
-            const self = this;
+    plugin.start = function() {
+        window._vc_emojiUtilities = true;
+        console.log('[EmojiUtilities] Enabled - enhanced emoji features');
+    };
 
-            // Long-press on emojis to copy
-            document.addEventListener('touchstart', function(e) {
-                const emoji = e.target.closest('[class*="emoji"]');
-                if (emoji && emoji.textContent) {
-                    self._showEmojiActions(emoji);
-                }
-            }, { passive: true });
-
-            Vencord.Logger.log('EmojiUtilities', 'Emoji enhancements enabled');
-        },
-
-        _showEmojiActions: function(emojiElement) {
-            const emoji = emojiElement.textContent;
-            const name = emojiElement.getAttribute('alt') || emojiElement.getAttribute('aria-label') || 'Unknown';
-
-            // Copy emoji
-            if (navigator.clipboard) {
-                navigator.clipboard.writeText(emoji).then(function() {
-                    Vencord.UI.showToast('Emoji copied!', 'success');
-                });
-            }
-        },
-
-        copyEmoji: function(emoji) {
-            if (navigator.clipboard) {
-                navigator.clipboard.writeText(emoji);
-            }
-        },
-
-        stop: function() {
-            Vencord.Logger.log('EmojiUtilities', 'Plugin stopped');
+    plugin.copyEmoji = function(emoji) {
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(emoji);
+            console.log('[EmojiUtilities] Copied emoji:', emoji);
         }
-    });
+    };
+
+    plugin.stop = function() {
+        window._vc_emojiUtilities = false;
+        console.log('[EmojiUtilities] Disabled');
+    };
+
+    Vencord.startPlugin('emojiUtilities');
 })();

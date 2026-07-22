@@ -1,7 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <JavaScriptCore/JavaScriptCore.h>
 #import <Foundation/Foundation.h>
-#import "VencordScripts.h"
 
 @interface DiscordAppDelegate : UIResponder <UIApplicationDelegate>
 @property (nonatomic, strong) UIWindow *window;
@@ -71,65 +70,83 @@ void setPluginEnabled(NSString *pluginId, BOOL enabled) {
     savePluginStates();
 }
 
+#pragma mark - JS File Loader
+
+NSString *loadJSFile(NSString *name) {
+    NSString *pluginsDir = [[[NSBundle mainBundle] bundlePath]
+                            stringByAppendingPathComponent:@"VencordJS/plugins"];
+    NSString *path = [pluginsDir stringByAppendingPathComponent:
+                      [name stringByAppendingString:@".js"]];
+    NSError *error = nil;
+    NSString *code = [NSString stringWithContentsOfFile:path
+                                               encoding:NSUTF8StringEncoding
+                                                  error:&error];
+    if (error) {
+        NSLog(@"[VencordIOS] Failed to load %@: %@", name, error.localizedDescription);
+    }
+    return code;
+}
+
+void evalJSFile(JSContext *context, NSString *name) {
+    NSString *code = loadJSFile(name);
+    if (code) {
+        [context evaluateScript:code];
+        NSLog(@"[VencordIOS] Loaded %@", name);
+    } else {
+        NSLog(@"[VencordIOS] Could not load %@.js", name);
+    }
+}
+
 #pragma mark - JavaScript Injection
 
 void injectVencordJS(JSContext *context) {
     if (!context || vencordInitialized) return;
 
     @try {
-        [context evaluateScript:vencordCoreJS];
+        evalJSFile(context, @"vencordCore");
 
         if (isPluginEnabled(@"noTrack")) {
-            [context evaluateScript:noTrackJS];
+            evalJSFile(context, @"noTrack");
         }
         if (isPluginEnabled(@"silentTyping")) {
-            [context evaluateScript:silentTypingJS];
+            evalJSFile(context, @"silentTyping");
         }
         if (isPluginEnabled(@"messageLogger")) {
-            [context evaluateScript:messageLoggerJS];
+            evalJSFile(context, @"messageLogger");
         }
         if (isPluginEnabled(@"betterEmbeds")) {
-            [context evaluateScript:betterEmbedsJS];
+            evalJSFile(context, @"betterEmbeds");
         }
         if (isPluginEnabled(@"noReplyTimeout")) {
-            [context evaluateScript:noReplyTimeoutJS];
+            evalJSFile(context, @"noReplyTimeout");
         }
         if (isPluginEnabled(@"showHiddenServers")) {
-            [context evaluateScript:showHiddenServersJS];
+            evalJSFile(context, @"showHiddenServers");
         }
         if (isPluginEnabled(@"blurNSFW")) {
-            [context evaluateScript:blurNSFWJS];
+            evalJSFile(context, @"blurNSFW");
         }
         if (isPluginEnabled(@"betterStatus")) {
-            [context evaluateScript:betterStatusJS];
+            evalJSFile(context, @"betterStatus");
         }
         if (isPluginEnabled(@"emojiUtilities")) {
-            [context evaluateScript:emojiUtilitiesJS];
+            evalJSFile(context, @"emojiUtilities");
         }
         if (isPluginEnabled(@"multiAccount")) {
-            [context evaluateScript:multiAccountJS];
+            evalJSFile(context, @"multiAccount");
         }
         if (isPluginEnabled(@"voiceOptimizer")) {
-            [context evaluateScript:voiceOptimizerJS];
+            evalJSFile(context, @"voiceOptimizer");
         }
         if (isPluginEnabled(@"unlimitedServers")) {
-            [context evaluateScript:unlimitedServersJS];
+            evalJSFile(context, @"unlimitedServers");
         }
 
-        NSString *pluginsPath = [[NSBundle mainBundle] pathForResource:@"VencordJS/plugins/vencordAllPlugins" ofType:@"js"];
-        if (pluginsPath) {
-            NSString *pluginsCode = [NSString stringWithContentsOfFile:pluginsPath encoding:NSUTF8StringEncoding error:nil];
-            if (pluginsCode) {
-                [context evaluateScript:pluginsCode];
-                NSLog(@"[VencordIOS] Loaded vencordAllPlugins.js (114 plugins)");
-            }
-        } else {
-            NSLog(@"[VencordIOS] vencordAllPlugins.js not found in bundle");
-        }
+        evalJSFile(context, @"vencordAllPlugins");
 
-        [context evaluateScript:vcSettingsUIJS];
+        evalJSFile(context, @"vcSettingsUI");
 
-        [context evaluateScript:@"Vencord.applyPatches();"];
+        [context evaluateScript:@"if(window.Vencord){Vencord.applyPatches();}"];
 
         vencordInitialized = YES;
         NSLog(@"[VencordIOS] All plugins loaded and patches applied");

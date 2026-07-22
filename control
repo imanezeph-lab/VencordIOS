@@ -1,0 +1,8 @@
+Package: com.vencord.ios
+Name: VencordIOS
+Depends: mobilesubstrate
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Vencord for Discord iOS - Client modification with plugins and themes
+Maintainer: VencordIOS
+Author: VencordIOS

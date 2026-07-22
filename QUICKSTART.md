@@ -11,7 +11,7 @@
 
 ```bash
 cd C:\Users\omara\OneDrive\Documents\discord\VencordIOS
-git remote add origin https://github.com/YOUR_USERNAME/VencordIOS.git
+git remote add origin https://github.com/imanezeph-lab/VencordIOS.git
 git branch -M main
 git push -u origin main
 ```

@@ -5,7 +5,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = VencordIOS
 
-VencordIOS_FILES = Tweak.x
+VencordIOS_FILES = Tweak.x VencordScripts.m
 VencordIOS_CFLAGS = -fobjc-arc -Wno-unused-variable
 VencordIOS_FRAMEWORKS = UIKit JavaScriptCore Foundation
 

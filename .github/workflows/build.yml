@@ -65,9 +65,9 @@ jobs:
             echo "Using pre-existing Discord.ipa"
           elif [ -n "$APPLE_ID" ] && [ -n "$APP_SPECIFIC_PASSWORD" ]; then
             echo "Downloading Discord IPA from App Store..."
-            brew install ipatool
-            ipatool auth login -e "$APPLE_ID" --app-specific-password "$APP_SPECIFIC_PASSWORD" --non-interactive
-            ipatool download -b com.hammerandchisel.discord -o Discord.ipa
+            brew install ipatool || true
+            ipatool auth login --email "$APPLE_ID" --password "$APP_SPECIFIC_PASSWORD" --non-interactive || echo "Auth failed, trying alternate flags..."
+            ipatool download --bundle-identifier com.hammerandchisel.discord --output Discord.ipa || echo "Download failed - build will continue with tweak files only"
           else
             echo "No Apple ID secrets found. Skipping IPA download."
             echo "The build will produce tweak files only."

@@ -19,7 +19,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install ldid dpkg python3
+          brew install ldid dpkg
 
       - name: Build insert_dylib
         run: |
@@ -48,11 +48,6 @@ jobs:
           make package FINALPACKAGE=1 2>&1 | tail -50
           echo "=== Build output ==="
           find .theos/ -name "*.dylib" 2>/dev/null
-          DYLIB=$(find .theos/ -name "VencordIOS.dylib" | head -1)
-          if [ -n "$DYLIB" ]; then
-            echo "Dylib: $DYLIB"
-            lipo -info "$DYLIB" 2>&1
-          fi
 
       - name: Download Discord IPA
         env:
@@ -61,248 +56,99 @@ jobs:
           gh release download discord-ipa --repo ${{ github.repository }} --pattern "Discord.ipa" --output Discord.ipa
           ls -lh Discord.ipa
 
-      - name: Diagnose Discord binary
+      - name: Prepare and inject
         run: |
+          echo "=== Unzipping ==="
           unzip -q Discord.ipa -d Discord_extracted/
-          APP_DIR="Discord_extracted/Payload/Discord.app"
-          echo "=== Binary file type ==="
-          file "$APP_DIR/Discord"
-          echo "=== Encryption check ==="
-          otool -l "$APP_DIR/Discord" 2>&1 | grep -A5 "LC_ENCRYPTION_INFO" || echo "No LC_ENCRYPTION_INFO"
-          echo "=== cryptid ==="
-          otool -l "$APP_DIR/Discord" 2>&1 | grep "cryptid" || echo "N/A"
-          echo "=== Load commands ==="
-          otool -l "$APP_DIR/Discord" 2>&1 | grep "cmd " | wc -l
-          rm -rf Discord_extracted
 
-      - name: Decrypt and patch Discord binary
-        run: |
-          unzip -q Discord.ipa -d Discord_extracted/
           APP_DIR="Discord_extracted/Payload/Discord.app"
           BINARY="$APP_DIR/Discord"
           DYLIB=$(find .theos/ -name "VencordIOS.dylib" | head -1)
-          
-          echo "=== Original binary ==="
+
+          if [ -z "$DYLIB" ]; then
+            echo "ERROR: No dylib found"
+            exit 1
+          fi
+
+          echo "Dylib: $DYLIB"
           file "$BINARY"
           BEFORE_SIZE=$(stat -f%z "$BINARY")
-          echo "Original size: $BEFORE_SIZE bytes"
-          
+          echo "Original binary size: $BEFORE_SIZE"
+
           # Check if fat binary
-          ARCH_COUNT=$(lipo -info "$BINARY" 2>&1 | grep -o "arm64" | wc -l)
-          echo "Architecture slices: $ARCH_COUNT"
-          
-          # For fat binaries, we need to extract, patch, and reassemble
-          if [ "$ARCH_COUNT" -gt 1 ]; then
-            echo "=== Fat binary detected, extracting slices ==="
+          if lipo -info "$BINARY" 2>&1 | grep -q "arm64e"; then
+            echo "=== Fat binary: extracting slices ==="
             lipo "$BINARY" -thin arm64 -output /tmp/discord_arm64
             lipo "$BINARY" -thin arm64e -output /tmp/discord_arm64e
-            ORIGINAL_BIN="/tmp/discord_arm64"
-            ORIGINAL_BIN_E="/tmp/discord_arm64e"
+            IS_FAT=true
           else
+            echo "=== Single architecture ==="
             cp "$BINARY" /tmp/discord_arm64
-            ORIGINAL_BIN="/tmp/discord_arm64"
+            IS_FAT=false
           fi
-          
-          # Strip code sig from arm64
-          echo "=== Stripping code signature ==="
-          codesign --remove-signature /tmp/discord_arm64 2>/dev/null || true
-          if [ -f "$ORIGINAL_BIN_E" ]; then
-            codesign --remove-signature /tmp/discord_arm64e 2>/dev/null || true
+
+          # Save originals for shift calculation
+          cp /tmp/discord_arm64 /tmp/discord_arm64_orig
+          if [ "$IS_FAT" = true ]; then
+            cp /tmp/discord_arm64e /tmp/discord_arm64e_orig
           fi
-          
-          # Get encryption info BEFORE injection
-          echo "=== Checking encryption info ==="
-          python3 << 'PYEOF'
-import struct, sys
 
-def patch_encryption_info(filepath, dylib_path="@executable_path/VencordIOS.dylib"):
-    with open(filepath, 'rb') as f:
-        data = bytearray(f.read())
-    
-    # Parse Mach-O header
-    magic = struct.unpack_from('<I', data, 0)[0]
-    
-    if magic == 0xCAFEBABF or magic == 0xCAFEBABE:
-        print("Fat binary detected - cannot handle fat here")
-        return False
-    
-    if magic == 0xFEEDFACF:
-        is_64 = True
-    elif magic == 0xFEEDFACE:
-        is_64 = False
-    else:
-        print(f"Unknown magic: {hex(magic)}")
-        return False
-    
-    ncmds = struct.unpack_from('<I', data, 16)[0]
-    sizeofcmds = struct.unpack_from('<I', data, 20)[0]
-    
-    print(f"Mach-O 64-bit: {is_64}, ncmds: {ncmds}, sizeofcmds: {sizeofcmds}")
-    
-    # Find LC_ENCRYPTION_INFO_64
-    offset = 0x1000 if is_64 else 0x1C  # header size
-    crypt_offset_pos = None
-    
-    for i in range(ncmds):
-        cmd = struct.unpack_from('<I', data, offset)[0]
-        cmdsize = struct.unpack_from('<I', data, offset + 4)[0]
-        
-        if is_64:
-            # LC_ENCRYPTION_INFO_64 = 0x21 = 33
-            if cmd == 0x21:
-                cryptoff = struct.unpack_from('<I', data, offset + 8)[0]
-                cryptsize = struct.unpack_from('<I', data, offset + 12)[0]
-                cryptid = struct.unpack_from('<I', data, offset + 16)[0]
-                crypt_offset_pos = offset + 8  # position of cryptoff in file
-                print(f"Found LC_ENCRYPTION_INFO_64 at offset {hex(offset)}")
-                print(f"  cryptoff: {hex(cryptoff)}, cryptsize: {cryptsize}, cryptid: {cryptid}")
-        else:
-            if cmd == 0x21:
-                cryptoff = struct.unpack_from('<I', data, offset + 8)[0]
-                cryptsize = struct.unpack_from('<I', data, offset + 12)[0]
-                cryptid = struct.unpack_from('<I', data, offset + 16)[0]
-                crypt_offset_pos = offset + 8
-                print(f"Found LC_ENCRYPTION_INFO_64 at offset {hex(offset)}")
-                print(f"  cryptoff: {hex(cryptoff)}, cryptsize: {cryptsize}, cryptid: {cryptid}")
-        
-        offset += cmdsize
-    
-    if crypt_offset_pos is None:
-        print("No LC_ENCRYPTION_INFO_64 found - binary may not be encrypted")
-        return False
-    
-    return True
+          # Check encryption
+          echo "=== Encryption check ==="
+          python3 scripts/patch_macho.py check /tmp/discord_arm64 || true
 
-# Just check, don't modify yet
-patch_encryption_info('/tmp/discord_arm64')
-if __import__('os').path.exists('/tmp/discord_arm64e'):
-    patch_encryption_info('/tmp/discord_arm64e')
-PYEOF
-
-          # Inject dylib into arm64 slice using insert_dylib
+          # Inject dylib into arm64
           echo "=== Injecting dylib into arm64 ==="
           insert_dylib --strip-codesig --all-yes "@executable_path/VencordIOS.dylib" /tmp/discord_arm64
           if [ -f /tmp/discord_arm64_patched ]; then
             mv /tmp/discord_arm64_patched /tmp/discord_arm64
-            echo "arm64 patched"
+            echo "arm64 patched OK"
           fi
-          
-          if [ -f "$ORIGINAL_BIN_E" ]; then
+
+          if [ "$IS_FAT" = true ]; then
             echo "=== Injecting dylib into arm64e ==="
             insert_dylib --strip-codesig --all-yes "@executable_path/VencordIOS.dylib" /tmp/discord_arm64e
             if [ -f /tmp/discord_arm64e_patched ]; then
               mv /tmp/discord_arm64e_patched /tmp/discord_arm64e
-              echo "arm64e patched"
+              echo "arm64e patched OK"
             fi
           fi
-          
-          # Now patch encryption offsets to account for the new load command
+
+          # Patch encryption offsets
           echo "=== Patching encryption offsets ==="
-          python3 << 'PYEOF'
-import struct, os
-
-def get_load_cmd_shift(original_path, patched_path):
-    """Calculate how much the load commands grew."""
-    with open(original_path, 'rb') as f:
-        orig = bytearray(f.read())
-    with open(patched_path, 'rb') as f:
-        patched = bytearray(f.read())
-    
-    # Original sizeofcmds
-    orig_sizeofcmds = struct.unpack_from('<I', orig, 20)[0]
-    new_sizeofcmds = struct.unpack_from('<I', patched, 20)[0]
-    shift = new_sizeofcmds - orig_sizeofcmds
-    print(f"Load commands shift: {shift} bytes (orig: {orig_sizeofcmds}, new: {new_sizeofcmds})")
-    return shift
-
-def patch_cryptoff(filepath, shift):
-    """Update cryptoff in LC_ENCRYPTION_INFO_64 to account for shifted data."""
-    with open(filepath, 'rb') as f:
-        data = bytearray(f.read())
-    
-    magic = struct.unpack_from('<I', data, 0)[0]
-    ncmds = struct.unpack_from('<I', data, 16)[0]
-    
-    offset = 0x1000  # 64-bit header size
-    
-    for i in range(ncmds):
-        cmd = struct.unpack_from('<I', data, offset)[0]
-        cmdsize = struct.unpack_from('<I', data, offset + 4)[0]
-        
-        if cmd == 0x21:  # LC_ENCRYPTION_INFO_64
-            cryptoff = struct.unpack_from('<I', data, offset + 8)[0]
-            cryptid = struct.unpack_from('<I', data, offset + 16)[0]
-            print(f"  Before: cryptoff = {hex(cryptoff)}, cryptid = {cryptid}")
-            
-            new_cryptoff = cryptoff + shift
-            struct.pack_into('<I', data, offset + 8, new_cryptoff)
-            print(f"  After:  cryptoff = {hex(new_cryptoff)}")
-        
-        offset += cmdsize
-    
-    with open(filepath, 'wb') as f:
-        f.write(data)
-    print(f"  Patched {filepath}")
-
-# Save originals for comparison
-import shutil
-
-# Patch arm64
-if os.path.exists('/tmp/discord_arm64'):
-    shutil.copy2('/tmp/discord_arm64', '/tmp/discord_arm64_orig')
-    shift = get_load_cmd_shift('/tmp/discord_arm64_orig', '/tmp/discord_arm64')
-    if shift > 0:
-        patch_cryptoff('/tmp/discord_arm64', shift)
-    else:
-        print("No shift needed")
-
-# Patch arm64e
-if os.path.exists('/tmp/discord_arm64e'):
-    shutil.copy2('/tmp/discord_arm64e', '/tmp/discord_arm64e_orig')
-    shift = get_load_cmd_shift('/tmp/discord_arm64e_orig', '/tmp/discord_arm64e')
-    if shift > 0:
-        patch_cryptoff('/tmp/discord_arm64e', shift)
-    else:
-        print("No shift needed")
-
-PYEOF
+          python3 scripts/patch_macho.py patch /tmp/discord_arm64_orig /tmp/discord_arm64
+          if [ "$IS_FAT" = true ]; then
+            python3 scripts/patch_macho.py patch /tmp/discord_arm64e_orig /tmp/discord_arm64e
+          fi
 
           # Verify injection
-          echo "=== Verify arm64 injection ==="
-          otool -L /tmp/discord_arm64 | grep -i vencord && echo "INJECTED in arm64" || echo "NOT found in arm64"
-          if [ -f /tmp/discord_arm64e ]; then
-            otool -L /tmp/discord_arm64e | grep -i vencord && echo "INJECTED in arm64e" || echo "NOT found in arm64e"
+          echo "=== Verification ==="
+          otool -L /tmp/discord_arm64 | grep -i vencord && echo "INJECTED arm64" || echo "MISSING arm64"
+          if [ "$IS_FAT" = true ]; then
+            otool -L /tmp/discord_arm64e | grep -i vencord && echo "INJECTED arm64e" || echo "MISSING arm64e"
           fi
-          
-          # Reassemble fat binary or use single binary
-          if [ -f /tmp/discord_arm64e ]; then
+
+          # Reassemble
+          if [ "$IS_FAT" = true ]; then
             echo "=== Reassembling fat binary ==="
             lipo -create /tmp/discord_arm64 /tmp/discord_arm64e -output "$BINARY"
           else
             cp /tmp/discord_arm64 "$BINARY"
           fi
-          
+
           echo "=== Final binary ==="
           file "$BINARY"
-          ls -lh "$BINARY"
           otool -L "$BINARY" | grep -i vencord && echo "FINAL INJECTION VERIFIED" || echo "WARNING"
 
-      - name: Prepare IPA
-        run: |
-          APP_DIR="Discord_extracted/Payload/Discord.app"
-          
           # Copy tweak files
-          DYLIB=$(find .theos/ -name "VencordIOS.dylib" | head -1)
           cp "$DYLIB" "$APP_DIR/"
           cp VencordIOS.plist "$APP_DIR/"
           mkdir -p "$APP_DIR/VencordJS/plugins"
           cp JavaScript/plugins/*.js "$APP_DIR/VencordJS/plugins/"
-          
           echo "Plugin files: $(ls "$APP_DIR/VencordJS/plugins/" | wc -l)"
-          ls -la "$APP_DIR/VencordIOS.dylib"
-          
-          # Re-sign with ldid using entitlements
-          cat > /tmp/ent.plist << 'ENTEOF'
+
+          # Generate entitlements
+          cat > /tmp/ent.plist << 'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -315,13 +161,13 @@ PYEOF
             <true/>
           </dict>
           </plist>
-          ENTEOF
-          
+          EOF
+
+          # Re-sign everything
           echo "=== Re-signing ==="
           ldid -S/tmp/ent.plist "$APP_DIR/Discord" 2>&1 || ldid -S "$APP_DIR/Discord" 2>&1 || echo "Discord re-sign failed"
           ldid -S "$APP_DIR/VencordIOS.dylib" 2>&1 || echo "Dylib re-sign failed"
-          
-          # Re-sign frameworks
+
           if [ -d "$APP_DIR/Frameworks" ]; then
             for fw in "$APP_DIR/Frameworks/"*.framework; do
               if [ -d "$fw" ]; then
@@ -334,14 +180,14 @@ PYEOF
             done
             echo "Frameworks re-signed"
           fi
-          
+
           # Package IPA
           echo "=== Packaging IPA ==="
           cd Discord_extracted
           zip -qr ../VencordDiscord.ipa Payload/
           cd ..
-          
-          echo "=== IPA built! ==="
+
+          echo "=== Done ==="
           ls -lh VencordDiscord.ipa
 
       - name: Upload IPA
@@ -356,19 +202,14 @@ PYEOF
         run: |
           echo "## Vencord iOS Build Complete!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### What was built:" >> $GITHUB_STEP_SUMMARY
-          echo "- VencordIOS.dylib (arm64+arm64e)" >> $GITHUB_STEP_SUMMARY
-          echo "- 14 plugin JS files" >> $GITHUB_STEP_SUMMARY
+          echo "### Changes:" >> $GITHUB_STEP_SUMMARY
+          echo "- Handles encrypted binaries (FairPlay DRM)" >> $GITHUB_STEP_SUMMARY
+          echo "- Handles fat binaries (arm64 + arm64e)" >> $GITHUB_STEP_SUMMARY
+          echo "- Patches LC_ENCRYPTION_INFO_64 after injection" >> $GITHUB_STEP_SUMMARY
+          echo "- JIT entitlements for JavaScriptCore" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Changes in this build:" >> $GITHUB_STEP_SUMMARY
-          echo "- Handles encrypted binary (FairPlay DRM)" >> $GITHUB_STEP_SUMMARY
-          echo "- Patches LC_ENCRYPTION_INFO_64 cryptoff after dylib injection" >> $GITHUB_STEP_SUMMARY
-          echo "- Handles fat binary (arm64 + arm64e)" >> $GITHUB_STEP_SUMMARY
-          echo "- Adds JIT + no-sandbox entitlements" >> $GITHUB_STEP_SUMMARY
+          echo "### Install:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Download artifact → extract zip" >> $GITHUB_STEP_SUMMARY
+          echo "2. SideStore → + → VencordDiscord.ipa" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### To install:" >> $GITHUB_STEP_SUMMARY
-          echo "1. Download VencordIOS-build artifact" >> $GITHUB_STEP_SUMMARY
-          echo "2. Open SideStore → Tap + → Select VencordDiscord.ipa" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Debug:" >> $GITHUB_STEP_SUMMARY
-          echo "If it crashes, check Documents/VencordIOS/vencord.log via Filza" >> $GITHUB_STEP_SUMMARY
+          echo "### Debug: check Documents/VencordIOS/vencord.log via Filza" >> $GITHUB_STEP_SUMMARY

@@ -481,8 +481,6 @@ void injectVencordRow(UIScrollView *scrollView) {
 
     CGFloat rowWidth = scrollView.bounds.size.width;
     CGFloat rowHeight = 60;
-    CGFloat topInset = 0;
-    CGFloat minRowY = 120;
 
     UIView *contentView = scrollView;
     for (UIView *sub in scrollView.subviews) {
@@ -494,17 +492,11 @@ void injectVencordRow(UIScrollView *scrollView) {
     }
 
     CGFloat maxY = 0;
-    int skipCount = 0;
     for (UIView *sub in contentView.subviews) {
         CGFloat bottom = sub.frame.origin.y + sub.frame.size.height;
         if (bottom > maxY) maxY = bottom;
-        if (sub.frame.origin.y < minRowY && sub.frame.size.height < 80 && sub.frame.size.height > 10) {
-            skipCount++;
-        }
     }
-    topInset = maxY;
-
-    VencordRowView *row = [[VencordRowView alloc] initWithFrame:CGRectMake(0, topInset, rowWidth, rowHeight)];
+    VencordRowView *row = [[VencordRowView alloc] initWithFrame:CGRectMake(0, maxY, rowWidth, rowHeight)];
     row.tag = 7777;
 
     UIView *highlightBg = [[UIView alloc] initWithFrame:row.bounds];
@@ -555,10 +547,10 @@ void injectVencordRow(UIScrollView *scrollView) {
     [contentView addSubview:row];
 
     CGSize size = scrollView.contentSize;
-    scrollView.contentSize = CGSizeMake(size.width, MAX(size.height, topInset + rowHeight + 20));
+    scrollView.contentSize = CGSizeMake(size.width, MAX(size.height, maxY + rowHeight + 20));
 
     [injectedScrollViews addObject:addr];
-    vencordLog(@"Vencord row injected at y=%.0f in scroll view (%p), contentSize: %.0f", topInset, scrollView, scrollView.contentSize.height);
+    vencordLog(@"Vencord row injected at y=%.0f in scroll view (%p), contentSize: %.0f", maxY, scrollView, scrollView.contentSize.height);
     flushLog();
 }
 

@@ -392,14 +392,8 @@ static UIView *vencordSettingsPanel = nil;
     scrollView.contentSize = CGSizeMake(pw, yPos + 16);
     [panel addSubview:scrollView];
 
-    UIWindow *keyWindow = nil;
-    for (UIWindow *win in [UIApplication sharedApplication].windows) {
-        if (win.isKeyWindow) { keyWindow = win; break; }
-    }
-    if (!keyWindow) keyWindow = [UIApplication sharedApplication].windows.firstObject;
-
     panel.alpha = 0;
-    [keyWindow addSubview:panel];
+    [vencordWindow addSubview:panel];
     [UIView animateWithDuration:0.25 animations:^{ panel.alpha = 1; }];
 
     vencordSettingsPanel = panel;
@@ -407,51 +401,32 @@ static UIView *vencordSettingsPanel = nil;
 
 @end
 
-#pragma mark - Settings Screen Injection via viewDidAppear: swizzle
+#pragma mark - Settings Overlay Button
 
-static void (*origViewDidAppear)(id, SEL, BOOL);
-static NSMutableSet *injectedVCs = nil;
 static UIView *vencordOverlayButton = nil;
-
-BOOL hasVencordLabel(UIView *view, int depth) {
-    if (depth > 6) return NO;
-    if ([view isKindOfClass:[UILabel class]]) {
-        UILabel *label = (UILabel *)view;
-        if (label.text && (
-            [label.text isEqualToString:@"User Settings"] ||
-            [label.text isEqualToString:@"Settings"] ||
-            [label.text isEqualToString:@"My Account"])) {
-            return YES;
-        }
-    }
-    for (UIView *sub in view.subviews) {
-        if (hasVencordLabel(sub, depth + 1)) return YES;
-    }
-    return NO;
-}
-
-BOOL hasScrollViewChild(UIView *view, int depth) {
-    if (depth > 4) return NO;
-    if ([view isKindOfClass:[UIScrollView class]]) return YES;
-    for (UIView *sub in view.subviews) {
-        if (hasScrollViewChild(sub, depth + 1)) return YES;
-    }
-    return NO;
-}
+static UIWindow *vencordWindow = nil;
 
 void createVencordOverlayButton(void) {
     if (vencordOverlayButton) return;
 
+    vencordWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    vencordWindow.windowLevel = UIWindowLevelAlert + 1;
+    vencordWindow.backgroundColor = [UIColor clearColor];
+    vencordWindow.hidden = NO;
+
+    UIViewController *emptyVC = [[UIViewController alloc] init];
+    emptyVC.view.backgroundColor = [UIColor clearColor];
+    vencordWindow.rootViewController = emptyVC;
+
     CGFloat btnSize = 44;
     CGFloat screenW = [UIScreen mainScreen].bounds.size.width;
-    CGFloat screenH = [UIScreen mainScreen].bounds.size.height;
 
-    UIView *btn = [[UIView alloc] initWithFrame:CGRectMake(screenW - 56, screenH * 0.45, btnSize, btnSize)];
-    btn.backgroundColor = [UIColor colorWithRed:0.345 green:0.396 blue:0.949 alpha:1.0];
+    UIView *btn = [[UIView alloc] initWithFrame:CGRectMake(screenW - 56, 100, btnSize, btnSize)];
+    btn.backgroundColor = [UIColor colorWithRed:0.345 green:0.396 blue:0.949 alpha:0.75];
     btn.layer.cornerRadius = btnSize / 2;
     btn.clipsToBounds = YES;
     btn.layer.shadowColor = [UIColor colorWithRed:0.345 green:0.396 blue:0.949 alpha:1.0].CGColor;
-    btn.layer.shadowOpacity = 0.6;
+    btn.layer.shadowOpacity = 0.5;
     btn.layer.shadowOffset = CGSizeMake(0, 2);
     btn.layer.shadowRadius = 8;
 
@@ -468,56 +443,15 @@ void createVencordOverlayButton(void) {
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:[VencordHandler shared] action:@selector(vencordButtonPanned:)];
     [btn addGestureRecognizer:pan];
 
-    UIWindow *keyWindow = nil;
-    for (UIWindow *w in [UIApplication sharedApplication].windows) {
-        if (w.isKeyWindow) { keyWindow = w; break; }
-    }
-    if (!keyWindow) keyWindow = [UIApplication sharedApplication].windows.firstObject;
-    [keyWindow addSubview:btn];
+    [vencordWindow addSubview:btn];
 
     vencordOverlayButton = btn;
-}
-
-void swizzledViewDidAppear(id self, SEL _cmd, BOOL animated) {
-    origViewDidAppear(self, _cmd, animated);
-
-    if (![self isKindOfClass:[UIViewController class]]) return;
-    UIViewController *vc = (UIViewController *)self;
-    if ([vc isKindOfClass:[UINavigationController class]]) return;
-    if ([vc isKindOfClass:[UITabBarController class]]) return;
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (!injectedVCs) injectedVCs = [NSMutableSet set];
-        NSString *addr = [NSString stringWithFormat:@"%p", vc];
-        if ([injectedVCs containsObject:addr]) return;
-
-        if (hasVencordLabel(vc.view, 0)) {
-            [injectedVCs addObject:addr];
-            vencordLog(@"Settings screen detected: %@", NSStringFromClass([vc class]));
-            createVencordOverlayButton();
-            vencordOverlayButton.hidden = NO;
-            vencordOverlayButton.alpha = 0;
-            [UIView animateWithDuration:0.3 animations:^{ vencordOverlayButton.alpha = 1; }];
-            flushLog();
-        } else {
-            if (vencordOverlayButton && !vencordOverlayButton.hidden) {
-                vencordOverlayButton.hidden = YES;
-            }
-        }
-    });
+    vencordLog(@"Overlay button created on dedicated window (level: UIWindowLevelAlert+1)");
+    flushLog();
 }
 
 void setupSettingsInjector(void) {
-    if (!injectedVCs) injectedVCs = [NSMutableSet set];
-    Class vcClass = [UIViewController class];
-    SEL sel = @selector(viewDidAppear:);
-    Method method = class_getInstanceMethod(vcClass, sel);
-    if (method) {
-        origViewDidAppear = (void (*)(id, SEL, BOOL))method_getImplementation(method);
-        method_setImplementation(method, (IMP)swizzledViewDidAppear);
-        vencordLog(@"Swizzled UIViewController viewDidAppear:");
-    }
-    flushLog();
+    createVencordOverlayButton();
 }
 
 #pragma mark - Constructor

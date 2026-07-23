@@ -215,11 +215,10 @@ void setupHooks(void) {
     }
 }
 
-#pragma mark - Settings Menu Entry (UIKit)
+#pragma mark - Settings Panel
 
 static UIView *vencordSettingsPanel = nil;
-static UIView *vencordOverlayButton = nil;
-static UIWindow *vencordWindow = nil;
+static UIView *vencordOverlayWindow = nil;
 
 @interface VencordHandler : NSObject
 + (instancetype)shared;
@@ -227,8 +226,6 @@ static UIWindow *vencordWindow = nil;
 - (void)hideSettingsPanel;
 - (void)closeTapped;
 - (void)toggleChanged:(UISwitch *)sender;
-- (void)vencordButtonTapped;
-- (void)vencordButtonPanned:(UIPanGestureRecognizer *)pan;
 @end
 
 @implementation VencordHandler
@@ -240,14 +237,6 @@ static UIWindow *vencordWindow = nil;
         instance = [[VencordHandler alloc] init];
     });
     return instance;
-}
-
-- (void)vencordButtonTapped {
-    if (vencordSettingsPanel && !vencordSettingsPanel.hidden) {
-        [self hideSettingsPanel];
-    } else {
-        [self showSettingsPanel];
-    }
 }
 
 - (void)closeTapped {
@@ -278,12 +267,6 @@ static UIWindow *vencordWindow = nil;
     savePluginStates();
     vencordLog(@"Plugin %@ %@", pluginId, sender.isOn ? @"enabled" : @"disabled");
     flushLog();
-}
-
-- (void)vencordButtonPanned:(UIPanGestureRecognizer *)pan {
-    CGPoint translation = [pan translationInView:pan.view];
-    pan.view.center = CGPointMake(pan.view.center.x + translation.x, pan.view.center.y + translation.y);
-    [pan setTranslation:CGPointZero inView:pan.view];
 }
 
 - (void)showSettingsPanel {
@@ -353,7 +336,7 @@ static UIWindow *vencordWindow = nil;
     [closeBtn setTitle:@"\u2715" forState:UIControlStateNormal];
     [closeBtn setTitleColor:[UIColor grayColor] forState:UIControlStateNormal];
     closeBtn.titleLabel.font = [UIFont systemFontOfSize:18];
-    [closeBtn addTarget:[VencordHandler shared] action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
+    [closeBtn addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:closeBtn];
 
     UIScrollView *scrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 56, pw, ph - 56)];
@@ -368,7 +351,7 @@ static UIWindow *vencordWindow = nil;
         toggle.tag = i;
         toggle.onTintColor = [UIColor colorWithRed:0.345 green:0.396 blue:0.949 alpha:1.0];
         toggle.transform = CGAffineTransformMakeScale(0.85, 0.85);
-        [toggle addTarget:[VencordHandler shared] action:@selector(toggleChanged:) forControlEvents:UIControlEventValueChanged];
+        [toggle addTarget:self action:@selector(toggleChanged:) forControlEvents:UIControlEventValueChanged];
 
         UILabel *nameLabel = [[UILabel alloc] initWithFrame:CGRectMake(8, 6, pw - 100, 22)];
         nameLabel.text = pluginNames[i];
@@ -394,8 +377,29 @@ static UIWindow *vencordWindow = nil;
     scrollView.contentSize = CGSizeMake(pw, yPos + 16);
     [panel addSubview:scrollView];
 
+    UIWindow *targetWindow = nil;
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if ([scene isKindOfClass:[UIWindowScene class]]) {
+            UIWindowScene *wScene = (UIWindowScene *)scene;
+            for (UIWindow *w in wScene.windows) {
+                if (w.isKeyWindow) { targetWindow = w; break; }
+            }
+            if (!targetWindow && wScene.windows.count > 0) {
+                targetWindow = wScene.windows.firstObject;
+            }
+        }
+        if (targetWindow) break;
+    }
+    if (!targetWindow) {
+        for (UIWindow *w in [UIApplication sharedApplication].windows) {
+            if (w.isKeyWindow) { targetWindow = w; break; }
+        }
+    }
+
     panel.alpha = 0;
-    [vencordWindow addSubview:panel];
+    if (targetWindow) {
+        [targetWindow addSubview:panel];
+    }
     [UIView animateWithDuration:0.25 animations:^{ panel.alpha = 1; }];
 
     vencordSettingsPanel = panel;
@@ -403,54 +407,183 @@ static UIWindow *vencordWindow = nil;
 
 @end
 
-#pragma mark - Settings Overlay Button
+#pragma mark - Settings Row Injection
 
-void createVencordOverlayButton(void) {
-    if (vencordOverlayButton) return;
+static NSMutableSet *injectedScrollViews = nil;
 
-    vencordWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    vencordWindow.windowLevel = UIWindowLevelAlert + 1;
-    vencordWindow.backgroundColor = [UIColor clearColor];
-    vencordWindow.hidden = NO;
+UIView *findLargestScrollView(UIView *view, int depth) {
+    if (depth > 12) return nil;
+    UIScrollView *bestCandidate = nil;
 
-    UIViewController *emptyVC = [[UIViewController alloc] init];
-    emptyVC.view.backgroundColor = [UIColor clearColor];
-    vencordWindow.rootViewController = emptyVC;
+    if ([view isKindOfClass:[UIScrollView class]]) {
+        UIScrollView *sv = (UIScrollView *)view;
+        if (sv.contentSize.height > 300 && sv.bounds.size.height > 200) {
+            bestCandidate = sv;
+        }
+    }
 
-    CGFloat btnSize = 44;
-    CGFloat screenW = [UIScreen mainScreen].bounds.size.width;
+    for (UIView *sub in view.subviews) {
+        UIView *found = findLargestScrollView(sub, depth + 1);
+        if (found) {
+            UIScrollView *foundSV = (UIScrollView *)found;
+            if (!bestCandidate || foundSV.contentSize.height > bestCandidate.contentSize.height) {
+                bestCandidate = foundSV;
+            }
+        }
+    }
+    return bestCandidate;
+}
 
-    UIView *btn = [[UIView alloc] initWithFrame:CGRectMake(screenW - 56, 100, btnSize, btnSize)];
-    btn.backgroundColor = [UIColor colorWithRed:0.345 green:0.396 blue:0.949 alpha:0.75];
-    btn.layer.cornerRadius = btnSize / 2;
-    btn.clipsToBounds = YES;
-    btn.layer.shadowColor = [UIColor colorWithRed:0.345 green:0.396 blue:0.949 alpha:1.0].CGColor;
-    btn.layer.shadowOpacity = 0.5;
-    btn.layer.shadowOffset = CGSizeMake(0, 2);
-    btn.layer.shadowRadius = 8;
+void vencordRowTapped(void) {
+    vencordLog(@"Vencord row tapped");
+    [[VencordHandler shared] showSettingsPanel];
+}
 
-    UILabel *vLabel = [[UILabel alloc] initWithFrame:btn.bounds];
-    vLabel.text = @"V";
-    vLabel.textColor = [UIColor whiteColor];
-    vLabel.font = [UIFont boldSystemFontOfSize:18];
-    vLabel.textAlignment = NSTextAlignmentCenter;
-    [btn addSubview:vLabel];
+void injectVencordRow(UIScrollView *scrollView) {
+    if (!injectedScrollViews) injectedScrollViews = [NSMutableSet set];
+    NSString *addr = [NSString stringWithFormat:@"%p", scrollView];
 
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:[VencordHandler shared] action:@selector(vencordButtonTapped)];
-    [btn addGestureRecognizer:tap];
+    for (UIView *sub in scrollView.subviews) {
+        if (sub.tag == 7777) {
+            [injectedScrollViews addObject:addr];
+            return;
+        }
+    }
 
-    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:[VencordHandler shared] action:@selector(vencordButtonPanned:)];
-    [btn addGestureRecognizer:pan];
+    CGFloat rowWidth = scrollView.bounds.size.width;
+    CGFloat rowHeight = 56;
 
-    [vencordWindow addSubview:btn];
+    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, 0, rowWidth, rowHeight)];
+    row.tag = 7777;
+    row.backgroundColor = [UIColor clearColor];
 
-    vencordOverlayButton = btn;
-    vencordLog(@"Overlay button created on dedicated window (level: UIWindowLevelAlert+1)");
+    UIView *iconBg = [[UIView alloc] initWithFrame:CGRectMake(16, 8, 40, 40)];
+    iconBg.backgroundColor = [UIColor colorWithRed:0.345 green:0.396 blue:0.949 alpha:1.0];
+    iconBg.layer.cornerRadius = 8;
+    UILabel *iconLabel = [[UILabel alloc] initWithFrame:iconBg.bounds];
+    iconLabel.text = @"V";
+    iconLabel.textColor = [UIColor whiteColor];
+    iconLabel.font = [UIFont boldSystemFontOfSize:18];
+    iconLabel.textAlignment = NSTextAlignmentCenter;
+    [iconBg addSubview:iconLabel];
+    [row addSubview:iconBg];
+
+    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(68, 8, 200, 24)];
+    titleLabel.text = @"Vencord";
+    titleLabel.textColor = [UIColor whiteColor];
+    titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightMedium];
+    [row addSubview:titleLabel];
+
+    UILabel *descLabel = [[UILabel alloc] initWithFrame:CGRectMake(68, 32, 200, 18)];
+    descLabel.text = @"Plugins & tweaks";
+    descLabel.textColor = [UIColor grayColor];
+    descLabel.font = [UIFont systemFontOfSize:12];
+    [row addSubview:descLabel];
+
+    UIView *chevronContainer = [[UIView alloc] initWithFrame:CGRectMake(rowWidth - 40, 14, 24, 28)];
+    UILabel *chevron = [[UILabel alloc] initWithFrame:chevronContainer.bounds];
+    chevron.text = @">";
+    chevron.textColor = [UIColor colorWithWhite:0.4 alpha:1.0];
+    chevron.font = [UIFont systemFontOfSize:18 weight:UIFontWeightLight];
+    [chevronContainer addSubview:chevron];
+    [row addSubview:chevronContainer];
+
+    UIView *separator = [[UIView alloc] initWithFrame:CGRectMake(16, rowHeight - 0.5, rowWidth - 16, 0.5)];
+    separator.backgroundColor = [UIColor colorWithWhite:0.3 alpha:0.5];
+    [row addSubview:separator];
+
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:[VencordHandler shared] action:@selector(vencordRowTapped)];
+    [row addGestureRecognizer:tap];
+
+    UIView *contentView = scrollView;
+    for (UIView *sub in scrollView.subviews) {
+        NSString *className = NSStringFromClass([sub class]);
+        if ([className containsString:@"Content"] || [className containsString:@"content"]) {
+            contentView = sub;
+            break;
+        }
+    }
+
+    for (UIView *sub in contentView.subviews) {
+        CGRect f = sub.frame;
+        f.origin.y += rowHeight;
+        sub.frame = f;
+    }
+
+    row.frame = CGRectMake(0, 0, rowWidth, rowHeight);
+    [contentView addSubview:row];
+
+    CGSize size = scrollView.contentSize;
+    scrollView.contentSize = CGSizeMake(size.width, size.height + rowHeight);
+
+    [injectedScrollViews addObject:addr];
+    vencordLog(@"Vencord row injected into scroll view (%p), contentSize: %.0f", scrollView, scrollView.contentSize.height);
     flushLog();
 }
 
+#pragma mark - Settings Screen Detection
+
+static void (*origViewDidAppear)(id, SEL, BOOL);
+
+void swizzledViewDidAppear(id self, SEL _cmd, BOOL animated) {
+    origViewDidAppear(self, _cmd, animated);
+
+    if (![self isKindOfClass:[UIViewController class]]) return;
+    UIViewController *vc = (UIViewController *)self;
+    if ([vc isKindOfClass:[UINavigationController class]]) return;
+    if ([vc isKindOfClass:[UITabBarController class]]) return;
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (!vc.view) return;
+        UIView *scrollView = findLargestScrollView(vc.view, 0);
+        if (scrollView) {
+            vencordLog(@"Found scroll view in %@ (%p, contentH=%.0f)", NSStringFromClass([vc class]), scrollView, [(UIScrollView *)scrollView contentSize].height);
+            injectVencordRow((UIScrollView *)scrollView);
+        }
+    });
+}
+
 void setupSettingsInjector(void) {
-    createVencordOverlayButton();
+    if (!injectedScrollViews) injectedScrollViews = [NSMutableSet set];
+
+    Class vcClass = [UIViewController class];
+    SEL sel = @selector(viewDidAppear:);
+    Method method = class_getInstanceMethod(vcClass, sel);
+    if (method) {
+        origViewDidAppear = (void (*)(id, SEL, BOOL))method_getImplementation(method);
+        method_setImplementation(method, (IMP)swizzledViewDidAppear);
+        vencordLog(@"Swizzled UIViewController viewDidAppear:");
+    }
+
+    [[NSTimer scheduledTimerWithTimeInterval:3.0 repeats:YES block:^(NSTimer *timer) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            UIWindowScene *wScene = (UIWindowScene *)scene;
+            for (UIWindow *window in wScene.windows) {
+                UIViewController *topVC = window.rootViewController;
+                while (topVC.presentedViewController) {
+                    topVC = topVC.presentedViewController;
+                }
+                if ([topVC isKindOfClass:[UINavigationController class]]) {
+                    topVC = [(UINavigationController *)topVC topViewController];
+                }
+                if (!topVC || !topVC.view) continue;
+
+                UIView *scrollView = findLargestScrollView(topVC.view, 0);
+                if (scrollView) {
+                    BOOL hasRow = NO;
+                    for (UIView *sub in ((UIScrollView *)scrollView).subviews) {
+                        if (sub.tag == 7777) { hasRow = YES; break; }
+                    }
+                    if (!hasRow) {
+                        injectVencordRow((UIScrollView *)scrollView);
+                    }
+                }
+            }
+        }
+    }] retain];
+
+    flushLog();
 }
 
 #pragma mark - Constructor
@@ -476,7 +609,7 @@ static void vencordInit(void) {
 
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             setupSettingsInjector();
-            vencordLog(@"Settings injector setup complete");
+            vencordLog(@"Settings injector active");
             flushLog();
         });
 

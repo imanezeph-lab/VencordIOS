@@ -45,9 +45,12 @@ jobs:
           export THEOS=~/theos
           export PATH="$THEOS/bin:$PATH"
           make clean 2>/dev/null || true
-          make package FINALPACKAGE=1 2>&1 | tail -50
+          make package FINALPACKAGE=1 2>&1 | tail -80
           echo "=== Build output ==="
-          find .theos/ -name "*.dylib" 2>/dev/null
+          find .theos/ -name "*.dylib" -o -name "*.a" 2>/dev/null
+          find .theos/ -type f -name "*Vencord*" 2>/dev/null
+          ls -la .theos/obj/ 2>/dev/null || echo "No .theos/obj/"
+          ls -laR .theos/obj/ 2>/dev/null || true
 
       - name: Download Discord IPA
         env:
@@ -63,10 +66,14 @@ jobs:
 
           APP_DIR="Discord_extracted/Payload/Discord.app"
           BINARY="$APP_DIR/Discord"
-          DYLIB=$(find .theos/ -name "VencordIOS.dylib" | head -1)
-
+          DYLIB=$(find .theos/ -name "VencordIOS.dylib" -o -name "VencordIOS*.dylib" 2>/dev/null | head -1)
+          if [ -z "$DYLIB" ]; then
+            DYLIB=$(find .theos/ -name "*.dylib" 2>/dev/null | head -1)
+          fi
           if [ -z "$DYLIB" ]; then
             echo "ERROR: No dylib found"
+            echo "=== Full .theos directory listing ==="
+            find .theos/ -type f 2>/dev/null
             exit 1
           fi
 

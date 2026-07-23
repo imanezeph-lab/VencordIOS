@@ -555,7 +555,9 @@ void setupSettingsInjector(void) {
         vencordLog(@"Swizzled UIViewController viewDidAppear:");
     }
 
-    [[NSTimer scheduledTimerWithTimeInterval:3.0 repeats:YES block:^(NSTimer *timer) {
+    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), 3 * NSEC_PER_SEC, 1 * NSEC_PER_SEC);
+    dispatch_source_set_event_handler(timer, ^{
         for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
             if (![scene isKindOfClass:[UIWindowScene class]]) continue;
             UIWindowScene *wScene = (UIWindowScene *)scene;
@@ -581,7 +583,8 @@ void setupSettingsInjector(void) {
                 }
             }
         }
-    }] retain];
+    });
+    dispatch_resume(timer);
 
     flushLog();
 }

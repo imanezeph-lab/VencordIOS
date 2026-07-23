@@ -434,10 +434,40 @@ UIView *findLargestScrollView(UIView *view, int depth) {
     return bestCandidate;
 }
 
-void vencordRowTapped(void) {
-    vencordLog(@"Vencord row tapped");
-    [[VencordHandler shared] showSettingsPanel];
+@interface VencordRowView : UIView
+@property (nonatomic, strong) UIView *highlightBg;
+@property (nonatomic, assign) BOOL highlightOn;
+@end
+
+@implementation VencordRowView
+
+- (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
+    self.highlightOn = YES;
+    self.highlightBg.hidden = NO;
 }
+
+- (void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event {
+    UITouch *touch = [touches anyObject];
+    CGPoint loc = [touch locationInView:self];
+    BOOL inside = CGRectContainsPoint(self.bounds, loc);
+    self.highlightBg.hidden = !inside;
+    self.highlightOn = inside;
+}
+
+- (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event {
+    self.highlightBg.hidden = YES;
+    self.highlightOn = NO;
+    if (self.onTap) self.onTap();
+}
+
+- (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event {
+    self.highlightBg.hidden = YES;
+    self.highlightOn = NO;
+}
+
+@property (nonatomic, copy) void (^onTap)(void);
+
+@end
 
 void injectVencordRow(UIScrollView *scrollView) {
     if (!injectedScrollViews) injectedScrollViews = [NSMutableSet set];
@@ -451,49 +481,9 @@ void injectVencordRow(UIScrollView *scrollView) {
     }
 
     CGFloat rowWidth = scrollView.bounds.size.width;
-    CGFloat rowHeight = 56;
-
-    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, 0, rowWidth, rowHeight)];
-    row.tag = 7777;
-    row.backgroundColor = [UIColor clearColor];
-
-    UIView *iconBg = [[UIView alloc] initWithFrame:CGRectMake(16, 8, 40, 40)];
-    iconBg.backgroundColor = [UIColor colorWithRed:0.345 green:0.396 blue:0.949 alpha:1.0];
-    iconBg.layer.cornerRadius = 8;
-    UILabel *iconLabel = [[UILabel alloc] initWithFrame:iconBg.bounds];
-    iconLabel.text = @"V";
-    iconLabel.textColor = [UIColor whiteColor];
-    iconLabel.font = [UIFont boldSystemFontOfSize:18];
-    iconLabel.textAlignment = NSTextAlignmentCenter;
-    [iconBg addSubview:iconLabel];
-    [row addSubview:iconBg];
-
-    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(68, 8, 200, 24)];
-    titleLabel.text = @"Vencord";
-    titleLabel.textColor = [UIColor whiteColor];
-    titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightMedium];
-    [row addSubview:titleLabel];
-
-    UILabel *descLabel = [[UILabel alloc] initWithFrame:CGRectMake(68, 32, 200, 18)];
-    descLabel.text = @"Plugins & tweaks";
-    descLabel.textColor = [UIColor grayColor];
-    descLabel.font = [UIFont systemFontOfSize:12];
-    [row addSubview:descLabel];
-
-    UIView *chevronContainer = [[UIView alloc] initWithFrame:CGRectMake(rowWidth - 40, 14, 24, 28)];
-    UILabel *chevron = [[UILabel alloc] initWithFrame:chevronContainer.bounds];
-    chevron.text = @">";
-    chevron.textColor = [UIColor colorWithWhite:0.4 alpha:1.0];
-    chevron.font = [UIFont systemFontOfSize:18 weight:UIFontWeightLight];
-    [chevronContainer addSubview:chevron];
-    [row addSubview:chevronContainer];
-
-    UIView *separator = [[UIView alloc] initWithFrame:CGRectMake(16, rowHeight - 0.5, rowWidth - 16, 0.5)];
-    separator.backgroundColor = [UIColor colorWithWhite:0.3 alpha:0.5];
-    [row addSubview:separator];
-
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:[VencordHandler shared] action:@selector(vencordRowTapped)];
-    [row addGestureRecognizer:tap];
+    CGFloat rowHeight = 60;
+    CGFloat topInset = 0;
+    CGFloat minRowY = 120;
 
     UIView *contentView = scrollView;
     for (UIView *sub in scrollView.subviews) {
@@ -504,20 +494,72 @@ void injectVencordRow(UIScrollView *scrollView) {
         }
     }
 
+    CGFloat maxY = 0;
+    int skipCount = 0;
     for (UIView *sub in contentView.subviews) {
-        CGRect f = sub.frame;
-        f.origin.y += rowHeight;
-        sub.frame = f;
+        CGFloat bottom = sub.frame.origin.y + sub.frame.size.height;
+        if (bottom > maxY) maxY = bottom;
+        if (sub.frame.origin.y < minRowY && sub.frame.size.height < 80 && sub.frame.size.height > 10) {
+            skipCount++;
+        }
     }
+    topInset = maxY;
 
-    row.frame = CGRectMake(0, 0, rowWidth, rowHeight);
+    UIView *row = [[VencordRowView alloc] initWithFrame:CGRectMake(0, topInset, rowWidth, rowHeight)];
+    row.tag = 7777;
+
+    UIView *highlightBg = [[UIView alloc] initWithFrame:row.bounds];
+    highlightBg.backgroundColor = [UIColor colorWithWhite:0.25 alpha:1.0];
+    highlightBg.hidden = YES;
+    highlightBg.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [row addSubview:highlightBg];
+    row.highlightBg = highlightBg;
+
+    UIView *iconBg = [[UIView alloc] initWithFrame:CGRectMake(16, 10, 40, 40)];
+    iconBg.backgroundColor = [UIColor colorWithRed:0.345 green:0.396 blue:0.949 alpha:1.0];
+    iconBg.layer.cornerRadius = 8;
+    UILabel *iconLabel = [[UILabel alloc] initWithFrame:iconBg.bounds];
+    iconLabel.text = @"V";
+    iconLabel.textColor = [UIColor whiteColor];
+    iconLabel.font = [UIFont boldSystemFontOfSize:18];
+    iconLabel.textAlignment = NSTextAlignmentCenter;
+    [iconBg addSubview:iconLabel];
+    [row addSubview:iconBg];
+
+    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(68, 10, 200, 24)];
+    titleLabel.text = @"Vencord";
+    titleLabel.textColor = [UIColor whiteColor];
+    titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightMedium];
+    [row addSubview:titleLabel];
+
+    UILabel *descLabel = [[UILabel alloc] initWithFrame:CGRectMake(68, 34, 200, 18)];
+    descLabel.text = @"Plugins & tweaks";
+    descLabel.textColor = [UIColor grayColor];
+    descLabel.font = [UIFont systemFontOfSize:12];
+    [row addSubview:descLabel];
+
+    UIImageView *chevron = [[UIImageView alloc] initWithFrame:CGRectMake(rowWidth - 34, 18, 10, 24)];
+    chevron.image = [UIImage systemImageNamed:@"chevron.right"];
+    chevron.tintColor = [UIColor colorWithWhite:0.4 alpha:1.0];
+    chevron.contentMode = UIViewContentModeScaleAspectFit;
+    [row addSubview:chevron];
+
+    UIView *separator = [[UIView alloc] initWithFrame:CGRectMake(68, rowHeight - 0.5, rowWidth - 68, 0.5)];
+    separator.backgroundColor = [UIColor colorWithWhite:0.3 alpha:0.5];
+    [row addSubview:separator];
+
+    row.onTap = ^{
+        vencordLog(@"Vencord row tapped");
+        [[VencordHandler shared] showSettingsPanel];
+    };
+
     [contentView addSubview:row];
 
     CGSize size = scrollView.contentSize;
-    scrollView.contentSize = CGSizeMake(size.width, size.height + rowHeight);
+    scrollView.contentSize = CGSizeMake(size.width, MAX(size.height, topInset + rowHeight + 20));
 
     [injectedScrollViews addObject:addr];
-    vencordLog(@"Vencord row injected into scroll view (%p), contentSize: %.0f", scrollView, scrollView.contentSize.height);
+    vencordLog(@"Vencord row injected at y=%.0f in scroll view (%p), contentSize: %.0f", topInset, scrollView, scrollView.contentSize.height);
     flushLog();
 }
 

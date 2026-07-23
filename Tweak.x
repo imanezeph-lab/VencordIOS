@@ -434,36 +434,32 @@ UIView *findLargestScrollView(UIView *view, int depth) {
     return bestCandidate;
 }
 
-@interface VencordRowView : UIView
-@property (nonatomic, strong) UIView *highlightBg;
-@property (nonatomic, assign) BOOL highlightOn;
+static UIView *vencordHighlightOverlay = nil;
+
+@interface VencordTouchHandler : UIView
 @property (nonatomic, copy) void (^onTap)(void);
 @end
 
-@implementation VencordRowView
+@implementation VencordTouchHandler
 
 - (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
-    self.highlightOn = YES;
-    self.highlightBg.hidden = NO;
+    vencordHighlightOverlay.hidden = NO;
 }
 
 - (void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event {
     UITouch *touch = [touches anyObject];
     CGPoint loc = [touch locationInView:self];
     BOOL inside = CGRectContainsPoint(self.bounds, loc);
-    self.highlightBg.hidden = !inside;
-    self.highlightOn = inside;
+    vencordHighlightOverlay.hidden = !inside;
 }
 
 - (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event {
-    self.highlightBg.hidden = YES;
-    self.highlightOn = NO;
+    vencordHighlightOverlay.hidden = YES;
     if (self.onTap) self.onTap();
 }
 
 - (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event {
-    self.highlightBg.hidden = YES;
-    self.highlightOn = NO;
+    vencordHighlightOverlay.hidden = YES;
 }
 
 @end
@@ -481,30 +477,18 @@ void injectVencordRow(UIScrollView *scrollView) {
 
     CGFloat rowWidth = scrollView.bounds.size.width;
     CGFloat rowHeight = 60;
+    CGFloat topOffset = 110;
 
-    UIView *contentView = scrollView;
-    for (UIView *sub in scrollView.subviews) {
-        NSString *className = NSStringFromClass([sub class]);
-        if ([className containsString:@"Content"] || [className containsString:@"content"]) {
-            contentView = sub;
-            break;
-        }
-    }
-
-    CGFloat maxY = 0;
-    for (UIView *sub in contentView.subviews) {
-        CGFloat bottom = sub.frame.origin.y + sub.frame.size.height;
-        if (bottom > maxY) maxY = bottom;
-    }
-    VencordRowView *row = [[VencordRowView alloc] initWithFrame:CGRectMake(0, maxY, rowWidth, rowHeight)];
+    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, topOffset, rowWidth, rowHeight)];
     row.tag = 7777;
+    row.clipsToBounds = YES;
 
-    UIView *highlightBg = [[UIView alloc] initWithFrame:row.bounds];
-    highlightBg.backgroundColor = [UIColor colorWithWhite:0.25 alpha:1.0];
-    highlightBg.hidden = YES;
-    highlightBg.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [row addSubview:highlightBg];
-    row.highlightBg = highlightBg;
+    UIView *highlight = [[UIView alloc] initWithFrame:row.bounds];
+    highlight.backgroundColor = [UIColor colorWithWhite:0.22 alpha:1.0];
+    highlight.hidden = YES;
+    highlight.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [row addSubview:highlight];
+    vencordHighlightOverlay = highlight;
 
     UIView *iconBg = [[UIView alloc] initWithFrame:CGRectMake(16, 10, 40, 40)];
     iconBg.backgroundColor = [UIColor colorWithRed:0.345 green:0.396 blue:0.949 alpha:1.0];
@@ -539,18 +523,29 @@ void injectVencordRow(UIScrollView *scrollView) {
     separator.backgroundColor = [UIColor colorWithWhite:0.3 alpha:0.5];
     [row addSubview:separator];
 
-    row.onTap = ^{
+    VencordTouchHandler *touchArea = [[VencordTouchHandler alloc] initWithFrame:row.bounds];
+    touchArea.backgroundColor = [UIColor clearColor];
+    touchArea.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    touchArea.onTap = ^{
         vencordLog(@"Vencord row tapped");
         [[VencordHandler shared] showSettingsPanel];
     };
+    [row addSubview:touchArea];
 
-    [contentView addSubview:row];
+    for (UIView *sub in scrollView.subviews) {
+        CGRect f = sub.frame;
+        f.origin.y += topOffset;
+        sub.frame = f;
+    }
+
+    row.frame = CGRectMake(0, 0, rowWidth, rowHeight);
+    [scrollView addSubview:row];
 
     CGSize size = scrollView.contentSize;
-    scrollView.contentSize = CGSizeMake(size.width, MAX(size.height, maxY + rowHeight + 20));
+    scrollView.contentSize = CGSizeMake(size.width, size.height + topOffset);
 
     [injectedScrollViews addObject:addr];
-    vencordLog(@"Vencord row injected at y=%.0f in scroll view (%p), contentSize: %.0f", maxY, scrollView, scrollView.contentSize.height);
+    vencordLog(@"Vencord row injected at top of scroll view (%p), contentSize: %.0f", scrollView, scrollView.contentSize.height);
     flushLog();
 }
 

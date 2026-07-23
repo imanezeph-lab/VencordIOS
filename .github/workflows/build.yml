@@ -44,13 +44,22 @@ jobs:
         run: |
           export THEOS=~/theos
           export PATH="$THEOS/bin:$PATH"
+          echo "THEOS=$THEOS"
+          echo "=== Config ==="
+          cat Makefile
           make clean 2>/dev/null || true
-          make package FINALPACKAGE=1 2>&1 | tail -80
+          echo "=== Building ==="
+          make package FINALPACKAGE=1 2>&1 || {
+            echo "=== BUILD FAILED — full output ==="
+            make package FINALPACKAGE=1 2>&1 || true
+            echo "=== Listing all files in .theos ==="
+            find .theos/ -type f 2>/dev/null
+            exit 1
+          }
           echo "=== Build output ==="
           find .theos/ -name "*.dylib" -o -name "*.a" 2>/dev/null
           find .theos/ -type f -name "*Vencord*" 2>/dev/null
-          ls -la .theos/obj/ 2>/dev/null || echo "No .theos/obj/"
-          ls -laR .theos/obj/ 2>/dev/null || true
+          ls -laR .theos/obj/ 2>/dev/null || echo "No .theos/obj/"
 
       - name: Download Discord IPA
         env:

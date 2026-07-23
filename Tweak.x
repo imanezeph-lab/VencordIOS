@@ -504,7 +504,7 @@ void injectVencordRow(UIScrollView *scrollView) {
     }
     topInset = maxY;
 
-    UIView *row = [[VencordRowView alloc] initWithFrame:CGRectMake(0, topInset, rowWidth, rowHeight)];
+    VencordRowView *row = [[VencordRowView alloc] initWithFrame:CGRectMake(0, topInset, rowWidth, rowHeight)];
     row.tag = 7777;
 
     UIView *highlightBg = [[UIView alloc] initWithFrame:row.bounds];

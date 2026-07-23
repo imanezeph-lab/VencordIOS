@@ -218,6 +218,8 @@ void setupHooks(void) {
 #pragma mark - Settings Menu Entry (UIKit)
 
 static UIView *vencordSettingsPanel = nil;
+static UIView *vencordOverlayButton = nil;
+static UIWindow *vencordWindow = nil;
 
 @interface VencordHandler : NSObject
 + (instancetype)shared;
@@ -402,9 +404,6 @@ static UIView *vencordSettingsPanel = nil;
 @end
 
 #pragma mark - Settings Overlay Button
-
-static UIView *vencordOverlayButton = nil;
-static UIWindow *vencordWindow = nil;
 
 void createVencordOverlayButton(void) {
     if (vencordOverlayButton) return;

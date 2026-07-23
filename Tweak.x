@@ -437,6 +437,7 @@ UIView *findLargestScrollView(UIView *view, int depth) {
 @interface VencordRowView : UIView
 @property (nonatomic, strong) UIView *highlightBg;
 @property (nonatomic, assign) BOOL highlightOn;
+@property (nonatomic, copy) void (^onTap)(void);
 @end
 
 @implementation VencordRowView
@@ -464,8 +465,6 @@ UIView *findLargestScrollView(UIView *view, int depth) {
     self.highlightBg.hidden = YES;
     self.highlightOn = NO;
 }
-
-@property (nonatomic, copy) void (^onTap)(void);
 
 @end
 
